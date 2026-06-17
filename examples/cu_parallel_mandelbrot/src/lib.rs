@@ -92,6 +92,16 @@ fn log_summary(
         frame_hz,
         last_digest
     );
+
+    // Echo the run summary to stdout so the benchmark harness (bench/) can capture
+    // throughput and the determinism digest directly, without parsing the interned
+    // unified log. Harmless for normal runs: one extra line alongside the logged summary.
+    println!(
+        "BENCH summary: mission={mission} frames_emitted={frames_emitted} expected_frames={} stripes={} rows={} elapsed_s={elapsed_s:.3} cl_hz={cl_hz:.2} row_hz={row_hz:.2} frame_hz={frame_hz:.2} last_frame_digest=0x{last_digest:016x}",
+        settings.frames,
+        settings.total_stripes(),
+        settings.total_rows(),
+    );
 }
 
 pub fn run_log_only() -> CuResult<()> {

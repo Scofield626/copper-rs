@@ -28,6 +28,7 @@ serde = { workspace = true }
 default = ["std"]
 std = []
 mmap-fsync = ["cu29/mmap-fsync"]
+rt-scheduling = ["cu29/rt-scheduling"]
 
 [lib]
 path = "src/lib.rs"
