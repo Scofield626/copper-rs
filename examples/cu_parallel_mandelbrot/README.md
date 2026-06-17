@@ -55,6 +55,7 @@ Run these from [examples/cu_parallel_mandelbrot](/home/gbin/projects/copper/copp
 - `just dag`
 - `just logreader`
 - `just fsck`
+- `just bench` / `just bench-matched` / `just bench-nice` — thread-pool benchmarks (see [bench/README.md](bench/README.md))
 
 Use the justfile itself for the full recipe list and exact command lines.
 
