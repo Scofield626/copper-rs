@@ -134,3 +134,30 @@ fsck log="logs/parallel_mandelbrot_log_only.copper":
   cd "{{ROOT}}"
   cargo build -p cu-parallel-mandelbrot --bin cu-parallel-mandelbrot-logreader --release
   "{{ROOT}}/target/release/cu-parallel-mandelbrot-logreader" "$log" fsck
+
+# Thread-pool throughput benchmark: A serial / B parallel-rt / C parallel-rt + pinned rt pool.
+# Writes bench/results_raw.csv. See bench/README.md.
+bench:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "{{ROOT}}"
+  bash examples/cu_parallel_mandelbrot/bench/run_bench.sh
+
+# Matched-depth affinity benchmark: 1 worker lane per physical core. Regenerates the
+# matched config for the current host first. Writes bench/results_matched.csv.
+bench-matched:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "{{ROOT}}"
+  python3 examples/cu_parallel_mandelbrot/bench/gen_matched_config.py
+  bash examples/cu_parallel_mandelbrot/bench/run_matched.sh
+
+# NICE-policy benchmark under CPU contention. Needs RLIMIT_NICE for Nice(-10) -- see
+# bench/README.md. Regenerates the matched config for the current host first.
+# Writes bench/results_nice.csv.
+bench-nice:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "{{ROOT}}"
+  python3 examples/cu_parallel_mandelbrot/bench/gen_matched_config.py
+  bash examples/cu_parallel_mandelbrot/bench/run_nice.sh
