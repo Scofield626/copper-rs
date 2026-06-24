@@ -15,6 +15,7 @@
 
 mod fsck;
 pub mod logstats;
+pub mod timing_profile;
 
 #[cfg(feature = "mcap")]
 pub mod mcap_export;
@@ -36,6 +37,7 @@ use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use logstats::{compute_logstats, write_logstats};
 use serde::Serialize;
 use std::fmt::{Display, Formatter};
+use std::fs::File;
 #[cfg(feature = "mcap")]
 use std::io::IsTerminal;
 use std::io::Read;
@@ -48,6 +50,8 @@ pub use mcap_export::{
 
 #[cfg(feature = "mcap")]
 pub use serde_to_jsonschema::trace_type_to_jsonschema;
+
+pub use timing_profile::{TimingFormat, export_timing_profile};
 
 /// Registers the typed CopperList decoder used by the generic Python iterator.
 ///
@@ -145,6 +149,20 @@ pub enum Command {
         /// Mission id to use when reading the config
         #[arg(long)]
         mission: Option<String>,
+    },
+    /// Export per-task per-cycle `process()` durations.
+    ///
+    /// One row per output message stamped by the runtime. Sinks (no output)
+    /// are not captured; whole-cycle wall-clock time is approximated as
+    /// `max(end) - min(start)` across messages in a copperlist.
+    TimingProfile {
+        /// Output format. `chrome-trace` is loadable in Perfetto and
+        /// Speedscope (which exposes a flamegraph view over it).
+        #[arg(long, value_enum, default_value_t = TimingFormat::Csv)]
+        format: TimingFormat,
+        /// Output file. Defaults to stdout if omitted.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
     /// Export copperlists to MCAP format (requires 'mcap' feature)
     #[cfg(feature = "mcap")]
@@ -298,6 +316,9 @@ where
         } => {
             run_logstats::<P>(dl, output, config, mission)?;
         }
+        Command::TimingProfile { format, output } => {
+            run_timing_profile::<P>(dl, format, output)?;
+        }
         #[cfg(feature = "mcap")]
         Command::ExportMcap {
             output,
@@ -415,6 +436,9 @@ where
         } => {
             run_logstats::<P>(dl, output, config, mission)?;
         }
+        Command::TimingProfile { format, output } => {
+            run_timing_profile::<P>(dl, format, output)?;
+        }
     }
 
     Ok(())
@@ -437,6 +461,26 @@ where
     let reader = UnifiedLoggerIOReader::new(dl, UnifiedLogType::CopperList);
     let stats = compute_logstats::<P>(reader, &cfg, mission.as_deref())?;
     write_logstats(&stats, &output)
+}
+
+fn run_timing_profile<P>(
+    dl: UnifiedLoggerRead,
+    format: TimingFormat,
+    output: Option<PathBuf>,
+) -> CuResult<()>
+where
+    P: CopperListTuple,
+{
+    let reader = UnifiedLoggerIOReader::new(dl, UnifiedLogType::CopperList);
+    match output {
+        Some(path) => {
+            let file = File::create(&path).map_err(|e| {
+                CuError::new_with_cause("Failed to create timing-profile output file", e)
+            })?;
+            export_timing_profile::<P>(reader, file, format)
+        }
+        None => export_timing_profile::<P>(reader, std::io::stdout(), format),
+    }
 }
 
 /// Helper function for MCAP export.

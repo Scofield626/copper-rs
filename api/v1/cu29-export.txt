@@ -31,6 +31,21 @@ pub cu29_export::logstats::PerfStats::samples: u64
 pub cu29_export::logstats::PerfStats::valid_time_samples: u64
 pub fn cu29_export::logstats::compute_logstats<P>(reader: impl std::io::Read, config: &cu29_runtime::config::CuConfig, mission: core::option::Option<&str>) -> cu29_traits::CuResult<cu29_export::logstats::LogStats> where P: cu29_traits::CopperListTuple + cu29_traits::CuPayloadRawBytes
 pub fn cu29_export::logstats::write_logstats(stats: &cu29_export::logstats::LogStats, path: &std::path::Path) -> cu29_traits::CuResult<()>
+pub mod cu29_export::timing_profile
+pub enum cu29_export::timing_profile::TimingFormat
+pub cu29_export::timing_profile::TimingFormat::ChromeTrace
+pub cu29_export::timing_profile::TimingFormat::Csv
+pub cu29_export::timing_profile::TimingFormat::Json
+impl core::fmt::Display for cu29_export::timing_profile::TimingFormat
+pub fn cu29_export::timing_profile::TimingFormat::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct cu29_export::timing_profile::TaskTiming
+pub cu29_export::timing_profile::TaskTiming::culist_id: u64
+pub cu29_export::timing_profile::TaskTiming::duration_ns: u64
+pub cu29_export::timing_profile::TaskTiming::end_ns: u64
+pub cu29_export::timing_profile::TaskTiming::start_ns: u64
+pub cu29_export::timing_profile::TaskTiming::task_id: core::option::Option<alloc::string::String>
+pub cu29_export::timing_profile::TaskTiming::task_index: usize
+pub fn cu29_export::timing_profile::export_timing_profile<P>(reader: impl std::io::Read, writer: impl std::io::Write, format: cu29_export::timing_profile::TimingFormat) -> cu29_traits::CuResult<()> where P: cu29_traits::CopperListTuple
 pub enum cu29_export::Command
 pub cu29_export::Command::ExtractCopperlists
 pub cu29_export::Command::ExtractCopperlists::export_format: cu29_export::ExportFormat
@@ -43,16 +58,26 @@ pub cu29_export::Command::LogStats
 pub cu29_export::Command::LogStats::config: std::path::PathBuf
 pub cu29_export::Command::LogStats::mission: core::option::Option<alloc::string::String>
 pub cu29_export::Command::LogStats::output: std::path::PathBuf
+pub cu29_export::Command::TimingProfile
+pub cu29_export::Command::TimingProfile::format: cu29_export::timing_profile::TimingFormat
+pub cu29_export::Command::TimingProfile::output: core::option::Option<std::path::PathBuf>
 pub enum cu29_export::ExportFormat
 pub cu29_export::ExportFormat::Csv
 pub cu29_export::ExportFormat::Json
 impl core::fmt::Display for cu29_export::ExportFormat
 pub fn cu29_export::ExportFormat::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum cu29_export::TimingFormat
+pub cu29_export::TimingFormat::ChromeTrace
+pub cu29_export::TimingFormat::Csv
+pub cu29_export::TimingFormat::Json
+impl core::fmt::Display for cu29_export::timing_profile::TimingFormat
+pub fn cu29_export::timing_profile::TimingFormat::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct cu29_export::LogReaderCli
 pub cu29_export::LogReaderCli::command: cu29_export::Command
 pub cu29_export::LogReaderCli::unifiedlog_base: std::path::PathBuf
 pub fn cu29_export::assert_unified_log_mission(unifiedlog_base: &std::path::Path, expected_mission: &str) -> cu29_traits::CuResult<()>
 pub fn cu29_export::copperlists_reader<P: cu29_traits::CopperListTuple>(src: impl std::io::Read) -> impl core::iter::traits::iterator::Iterator<Item = cu29_runtime::copperlist::CopperList<P>>
+pub fn cu29_export::export_timing_profile<P>(reader: impl std::io::Read, writer: impl std::io::Write, format: cu29_export::timing_profile::TimingFormat) -> cu29_traits::CuResult<()> where P: cu29_traits::CopperListTuple
 pub fn cu29_export::keyframes_reader(src: impl std::io::Read) -> impl core::iter::traits::iterator::Iterator<Item = cu29_runtime::curuntime::KeyFrame>
 pub fn cu29_export::run_cli<P>() -> cu29_traits::CuResult<()> where P: cu29_traits::CopperListTuple + cu29_traits::CuPayloadRawBytes + 'static
 pub fn cu29_export::runtime_lifecycle_reader(src: impl std::io::Read) -> impl core::iter::traits::iterator::Iterator<Item = cu29_runtime::curuntime::RuntimeLifecycleRecord>
