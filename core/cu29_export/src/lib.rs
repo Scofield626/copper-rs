@@ -51,7 +51,7 @@ pub use mcap_export::{
 #[cfg(feature = "mcap")]
 pub use serde_to_jsonschema::trace_type_to_jsonschema;
 
-pub use timing_profile::{TimingFormat, export_timing_profile};
+pub use timing_profile::{TaskTiming, TimingFormat, export_timing_profile};
 
 /// Registers the typed CopperList decoder used by the generic Python iterator.
 ///
@@ -153,8 +153,7 @@ pub enum Command {
     /// Export per-task per-cycle `process()` durations.
     ///
     /// One row per output message stamped by the runtime. Sinks (no output)
-    /// are not captured; whole-cycle wall-clock time is approximated as
-    /// `max(end) - min(start)` across messages in a copperlist.
+    /// and bridge slots without stamped `process_time` are not captured.
     TimingProfile {
         /// Output format. `chrome-trace` is loadable in Perfetto and
         /// Speedscope (which exposes a flamegraph view over it).

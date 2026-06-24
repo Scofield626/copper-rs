@@ -75,6 +75,13 @@ pub fn cu29_export::timing_profile::TimingFormat::fmt(&self, f: &mut core::fmt::
 pub struct cu29_export::LogReaderCli
 pub cu29_export::LogReaderCli::command: cu29_export::Command
 pub cu29_export::LogReaderCli::unifiedlog_base: std::path::PathBuf
+pub struct cu29_export::TaskTiming
+pub cu29_export::TaskTiming::culist_id: u64
+pub cu29_export::TaskTiming::duration_ns: u64
+pub cu29_export::TaskTiming::end_ns: u64
+pub cu29_export::TaskTiming::start_ns: u64
+pub cu29_export::TaskTiming::task_id: core::option::Option<alloc::string::String>
+pub cu29_export::TaskTiming::task_index: usize
 pub fn cu29_export::assert_unified_log_mission(unifiedlog_base: &std::path::Path, expected_mission: &str) -> cu29_traits::CuResult<()>
 pub fn cu29_export::copperlists_reader<P: cu29_traits::CopperListTuple>(src: impl std::io::Read) -> impl core::iter::traits::iterator::Iterator<Item = cu29_runtime::copperlist::CopperList<P>>
 pub fn cu29_export::export_timing_profile<P>(reader: impl std::io::Read, writer: impl std::io::Write, format: cu29_export::timing_profile::TimingFormat) -> cu29_traits::CuResult<()> where P: cu29_traits::CopperListTuple

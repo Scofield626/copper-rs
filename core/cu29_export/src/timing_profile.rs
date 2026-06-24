@@ -14,9 +14,12 @@
 //! Known limitations of the underlying instrumentation:
 //!
 //! - Sinks have no output message and are therefore not captured here.
-//! - "Whole-cycle" time is reconstructed as `max(end) - min(start)` across
-//!   messages in a copperlist; it does not include runtime overhead
-//!   between tasks.
+//! - Bridge-fed copperlist slots (origin id `bridge::<spec>::<dir>::<chan>`)
+//!   only appear if the bridge stamps `process_time` on its outgoing
+//!   message; otherwise the row is silently dropped.
+//! - Output is strictly one row per stamped output message. Aggregations
+//!   like whole-cycle wall-clock time are left to the consumer (e.g. group
+//!   by `culist_id` and take `max(end_ns) - min(start_ns)`).
 
 use crate::copperlists_reader;
 use clap::ValueEnum;
@@ -148,9 +151,26 @@ fn write_csv_row(writer: &mut impl Write, row: &TaskTiming) -> CuResult<()> {
     let task_id = row.task_id.as_deref().unwrap_or("");
     let line = format!(
         "{},{},{},{},{},{}\n",
-        row.culist_id, row.task_index, task_id, row.start_ns, row.end_ns, row.duration_ns
+        row.culist_id,
+        row.task_index,
+        csv_quote(task_id),
+        row.start_ns,
+        row.end_ns,
+        row.duration_ns
     );
     write_all_bytes(writer, line.as_bytes())
+}
+
+/// RFC 4180 quoting: wrap in double quotes and double internal quotes if the
+/// field contains a comma, quote, CR, or LF; otherwise pass through. Today's
+/// task ids and bridge origin ids never trigger the slow path — this is a
+/// defensive guard for future config changes.
+fn csv_quote(field: &str) -> std::borrow::Cow<'_, str> {
+    if field.contains([',', '"', '\n', '\r']) {
+        std::borrow::Cow::Owned(format!("\"{}\"", field.replace('"', "\"\"")))
+    } else {
+        std::borrow::Cow::Borrowed(field)
+    }
 }
 
 fn write_json_row(writer: &mut impl Write, row: &TaskTiming, first: bool) -> CuResult<()> {
@@ -348,5 +368,14 @@ mod tests {
         assert_eq!(lines.len(), 3); // header + 2 stamped messages, unstamped skipped
         assert!(lines[1].starts_with("7,0,src,100,250,150"));
         assert!(lines[2].starts_with("7,2,downstream,900,1400,500"));
+    }
+
+    #[test]
+    fn csv_quote_escapes_special_characters() {
+        assert_eq!(csv_quote("simple"), "simple");
+        assert_eq!(csv_quote("bridge::foo::rx::ch"), "bridge::foo::rx::ch");
+        assert_eq!(csv_quote("with,comma"), "\"with,comma\"");
+        assert_eq!(csv_quote("with\"quote"), "\"with\"\"quote\"");
+        assert_eq!(csv_quote("with\nnewline"), "\"with\nnewline\"");
     }
 }
