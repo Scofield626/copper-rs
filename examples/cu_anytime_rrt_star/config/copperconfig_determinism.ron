@@ -27,8 +27,6 @@
                 "goal_threshold": 1.0,
                 "goal_bias": 0.05,
                 "neighbor_radius": 3.0,
-                // Small cap so each cycle terminates via Converged fast; the
-                // mock clock never advances, so budget is not what bounds it.
                 "max_tree_nodes": 120,
                 "map_pgm_path": "maps/depot.pgm",
                 "map_resolution_m": 1.0,
