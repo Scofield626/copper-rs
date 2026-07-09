@@ -17,8 +17,13 @@ publish = false
 name = "cu-anytime-rrt-star"
 path = "src/main.rs"
 
+[features]
+default = []
+determinism_ci = ["cu29-export"]
+
 [dependencies]
 cu29 = { workspace = true }
+cu29-export = { workspace = true, optional = true }
 cu-rng = { workspace = true }
 serde = { workspace = true }
 bincode = { workspace = true }

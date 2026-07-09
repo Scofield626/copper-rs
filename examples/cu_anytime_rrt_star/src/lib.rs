@@ -11,6 +11,9 @@ pub mod occupancy_grid;
 pub mod planner;
 pub mod tasks;
 
+#[cfg(feature = "determinism_ci")]
+pub mod determinism;
+
 pub use planner::RrtStarPlanner;
 
 /// 2-D world-frame point used by both queries and planned paths.

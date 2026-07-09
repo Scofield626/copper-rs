@@ -1,0 +1,62 @@
+(
+    resources: [
+        (
+            id: "planner_rng",
+            provider: "cu_rng::CuRngBundle",
+            config: {"seed": 42},
+        ),
+    ],
+    tasks: [
+        (
+            id: "query",
+            type: "crate::tasks::QuerySource",
+            config: {
+                "start_x": 1.5,
+                "start_y": 1.5,
+                "goal_x": 30.5,
+                "goal_y": 30.5,
+            },
+        ),
+        (
+            id: "planner",
+            type: "cu29::AnytimeTask<crate::RrtStarPlanner>",
+            config: {
+                "budget_us": 8000,
+                "on_overload": "reuse_last",
+                "step_size": 1.5,
+                "goal_threshold": 1.0,
+                "goal_bias": 0.05,
+                "neighbor_radius": 3.0,
+                // Small cap so each cycle terminates via Converged fast; the
+                // mock clock never advances, so budget is not what bounds it.
+                "max_tree_nodes": 120,
+                "map_pgm_path": "maps/depot.pgm",
+                "map_resolution_m": 1.0,
+                "map_origin_x": 0.0,
+                "map_origin_y": 0.0,
+            },
+            resources: {"rng": "planner_rng.rng"},
+        ),
+        (
+            id: "sink",
+            type: "crate::tasks::PathSink",
+        ),
+    ],
+    cnx: [
+        (
+            src: "query",
+            dst: "planner",
+            msg: "crate::PlanQuery",
+        ),
+        (
+            src: "planner",
+            dst: "sink",
+            msg: "cu29::AnytimeOutput<crate::PlannedPath>",
+        ),
+    ],
+    runtime: (rate_target_hz: 100),
+    logging: (
+        keyframe_interval: 4,
+        section_size_mib: 1,
+    ),
+)
