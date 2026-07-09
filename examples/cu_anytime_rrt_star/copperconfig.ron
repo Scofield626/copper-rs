@@ -1,8 +1,39 @@
 (
+    resources: [
+        (
+            id: "planner_rng",
+            provider: "cu_rng::CuRngBundle",
+            config: {"seed": 42},
+        ),
+    ],
     tasks: [
         (
             id: "query",
             type: "cu_anytime_rrt_star::tasks::QuerySource",
+            config: {
+                "start_x": 1.5,
+                "start_y": 1.5,
+                "goal_x": 30.5,
+                "goal_y": 30.5,
+            },
+        ),
+        (
+            id: "planner",
+            type: "cu29::AnytimeTask<cu_anytime_rrt_star::RrtStarPlanner>",
+            config: {
+                "budget_us": 8000,
+                "on_overload": "reuse_last",
+                "step_size": 1.5,
+                "goal_threshold": 1.0,
+                "goal_bias": 0.05,
+                "neighbor_radius": 3.0,
+                "max_tree_nodes": 20000,
+                "map_pgm_path": "maps/depot.pgm",
+                "map_resolution_m": 1.0,
+                "map_origin_x": 0.0,
+                "map_origin_y": 0.0,
+            },
+            resources: {"rng": "planner_rng.rng"},
         ),
         (
             id: "sink",
@@ -12,10 +43,16 @@
     cnx: [
         (
             src: "query",
-            dst: "sink",
+            dst: "planner",
             msg: "cu_anytime_rrt_star::PlanQuery",
         ),
+        (
+            src: "planner",
+            dst: "sink",
+            msg: "cu29::AnytimeOutput<cu_anytime_rrt_star::PlannedPath>",
+        ),
     ],
+    runtime: (rate_target_hz: 100),
     logging: (
         keyframe_interval: 10000,
         section_size_mib: 1,

@@ -1,6 +1,7 @@
 use cu29::prelude::*;
+use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[copper_runtime(config = "copperconfig.ron")]
 struct AnytimeRrtStarApp {}
@@ -8,6 +9,12 @@ struct AnytimeRrtStarApp {}
 const SLAB_SIZE: Option<usize> = Some(64 * 1024 * 1024);
 
 fn main() {
+    // Anchor CWD at the crate root so `maps/` and `logs/` in the RON config
+    // and the log path below resolve consistently regardless of where the
+    // binary is invoked from.
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    env::set_current_dir(&manifest_dir).expect("Failed to chdir to crate root");
+
     let logger_path = "logs/anytime_rrt_star.copper";
     if let Some(parent) = Path::new(logger_path).parent()
         && !parent.exists()

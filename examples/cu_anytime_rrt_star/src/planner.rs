@@ -62,6 +62,24 @@ pub struct RrtStarPlanner {
     rng: CuRng,
 }
 
+impl TypePath for RrtStarPlanner {
+    fn type_path() -> &'static str {
+        "cu_anytime_rrt_star::planner::RrtStarPlanner"
+    }
+    fn short_type_path() -> &'static str {
+        "RrtStarPlanner"
+    }
+    fn type_ident() -> Option<&'static str> {
+        Some("RrtStarPlanner")
+    }
+    fn crate_name() -> Option<&'static str> {
+        Some("cu_anytime_rrt_star")
+    }
+    fn module_path() -> Option<&'static str> {
+        Some("planner")
+    }
+}
+
 impl Freezable for RrtStarPlanner {}
 
 impl Anytime for RrtStarPlanner {
@@ -234,7 +252,9 @@ impl Anytime for RrtStarPlanner {
             }
         }
 
-        if self.best_cost <= q.max_cost.unwrap_or(f32::INFINITY) {
+        if let Some(target) = q.max_cost
+            && self.best_cost <= target
+        {
             return Ok(Step::Satisfied);
         }
         Ok(Step::Continue)
