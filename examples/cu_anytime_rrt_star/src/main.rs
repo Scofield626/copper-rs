@@ -1,0 +1,27 @@
+use cu29::prelude::*;
+use std::fs;
+use std::path::Path;
+
+#[copper_runtime(config = "copperconfig.ron")]
+struct AnytimeRrtStarApp {}
+
+const SLAB_SIZE: Option<usize> = Some(64 * 1024 * 1024);
+
+fn main() {
+    let logger_path = "logs/anytime_rrt_star.copper";
+    if let Some(parent) = Path::new(logger_path).parent()
+        && !parent.exists()
+    {
+        fs::create_dir_all(parent).expect("Failed to create logs directory");
+    }
+
+    let mut app = AnytimeRrtStarApp::builder()
+        .with_log_path(logger_path, SLAB_SIZE)
+        .expect("Failed to setup logger.")
+        .build()
+        .expect("Failed to create application.");
+
+    if let Err(error) = app.run() {
+        debug!("Application ended: {}", error);
+    }
+}

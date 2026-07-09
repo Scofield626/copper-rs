@@ -1,0 +1,23 @@
+(
+    tasks: [
+        (
+            id: "query",
+            type: "cu_anytime_rrt_star::tasks::QuerySource",
+        ),
+        (
+            id: "sink",
+            type: "cu_anytime_rrt_star::tasks::PathSink",
+        ),
+    ],
+    cnx: [
+        (
+            src: "query",
+            dst: "sink",
+            msg: "cu_anytime_rrt_star::PlanQuery",
+        ),
+    ],
+    logging: (
+        keyframe_interval: 10000,
+        section_size_mib: 1,
+    ),
+)
