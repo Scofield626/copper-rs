@@ -7,6 +7,7 @@
 use cu29::bincode::{Decode, Encode};
 use cu29::prelude::*;
 
+pub mod occupancy_grid;
 pub mod tasks;
 
 /// 2-D world-frame point used by both queries and planned paths.
