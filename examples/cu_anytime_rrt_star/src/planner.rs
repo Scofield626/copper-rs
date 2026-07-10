@@ -33,7 +33,6 @@ struct RrtNode {
 #[derive(Reflect)]
 #[reflect(no_field_bounds, from_reflect = false, type_path = false)]
 pub struct RrtStarPlanner {
-    // Static config, read once in `new`.
     step_size: f32,
     goal_threshold: f32,
     goal_bias: f32,
@@ -44,18 +43,15 @@ pub struct RrtStarPlanner {
     sample_min_y: f32,
     sample_max_y: f32,
 
-    // Tree + per-cycle counters.
     #[reflect(ignore)]
     nodes: Vec<RrtNode>,
     iter: u32,
     best_goal_ix: Option<u32>,
     best_cost: f32,
 
-    // Zero-alloc scratch: pre-sized in `new`, reused via `clear` in `refine`.
     #[reflect(ignore)]
     near_scratch: Vec<u32>,
 
-    // Owned resources.
     #[reflect(ignore)]
     map: OccupancyGrid,
     #[reflect(ignore)]
@@ -101,6 +97,11 @@ impl Anytime for RrtStarPlanner {
             })?;
         if max_tree_nodes == 0 {
             return Err(CuError::from("RrtStarPlanner 'max_tree_nodes' must be > 0"));
+        }
+        if max_tree_nodes > u32::MAX as u64 {
+            return Err(CuError::from(format!(
+                "RrtStarPlanner 'max_tree_nodes' must fit in u32 (got {max_tree_nodes})"
+            )));
         }
         let max_tree_nodes = max_tree_nodes as u32;
 
@@ -295,6 +296,10 @@ impl RrtStarPlanner {
     }
 
     fn nearest_index(&self, target: Point2D) -> u32 {
+        debug_assert!(
+            !self.nodes.is_empty(),
+            "nearest_index called with empty tree; base() must seed the start node first"
+        );
         let mut best_ix = 0u32;
         let mut best_d = f32::INFINITY;
         for (ix, node) in self.nodes.iter().enumerate() {

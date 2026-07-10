@@ -1,3 +1,9 @@
+// Type paths use `crate::...` here — not `cu_anytime_rrt_star::...` as in
+// ../copperconfig.ron — because `#[copper_runtime]` for the determinism app
+// expands inside the lib crate (src/determinism.rs), whereas main.rs is a
+// separate bin crate that sees the tasks under the external crate name.
+// Also uses a tiny `max_tree_nodes` and short `keyframe_interval` so the
+// replay test finishes in seconds without giving up test coverage.
 (
     resources: [
         (

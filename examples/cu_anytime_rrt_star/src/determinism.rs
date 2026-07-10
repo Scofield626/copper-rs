@@ -77,7 +77,7 @@ fn read_copperlist_stream_encoded(log_base: &Path) -> CuResult<Vec<Vec<u8>>> {
         .build()
         .expect("failed to open log for read")
     else {
-        panic!("expected read logger");
+        unreachable!("UnifiedLoggerBuilder without a write path returns Read");
     };
     let mut io_reader = UnifiedLoggerIOReader::new(dl, UnifiedLogType::CopperList);
     let iter = copperlists_reader::<default::CuStampedDataSet>(&mut io_reader);
