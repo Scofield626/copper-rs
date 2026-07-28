@@ -51,10 +51,10 @@ mod tests {
         let mission_a = config.get_graph(Some("A")).expect("mission A graph");
         let mission_b = config.get_graph(Some("B")).expect("mission B graph");
 
-        let runtime_a =
-            compute_runtime_plan(mission_a, PlanPolicy::default()).expect("mission A runtime plan");
-        let runtime_b =
-            compute_runtime_plan(mission_b, PlanPolicy::default()).expect("mission B runtime plan");
+        let runtime_a = compute_runtime_plan(mission_a, &PlanPolicy::default())
+            .expect("mission A runtime plan");
+        let runtime_b = compute_runtime_plan(mission_b, &PlanPolicy::default())
+            .expect("mission B runtime plan");
 
         let sink_a = runtime_a
             .steps

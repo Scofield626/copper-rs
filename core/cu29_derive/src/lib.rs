@@ -682,7 +682,7 @@ fn build_gen_cumsgs_support(
         graph,
         &task_specs,
         &mut bridge_specs,
-        cuconfig.plan_policy(),
+        &cuconfig.plan_policy(),
     )
     .map_err(|e| {
         if let Some(mission) = mission_label {
@@ -1723,7 +1723,7 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                 graph,
                 &task_specs,
                 &mut culist_bridge_specs,
-                copper_config.plan_policy(),
+                &copper_config.plan_policy(),
             ) {
                 Ok(plan) => plan,
                 Err(e) => return return_error(format!("Could not compute copperlist plan: {e}")),
@@ -7736,7 +7736,7 @@ fn build_execution_plan(
     graph: &CuGraph,
     task_specs: &CuTaskSpecSet,
     bridge_specs: &mut [BridgeSpec],
-    plan_policy: PlanPolicy,
+    plan_policy: &PlanPolicy,
 ) -> CuResult<(
     CuExecutionLoop,
     Vec<ExecutionEntity>,
@@ -9654,7 +9654,7 @@ mod tests {
         let src_id = graph.get_node_id_by_name("src").expect("missing src node");
 
         let runtime =
-            compute_runtime_plan(graph, config.plan_policy()).expect("runtime plan failed");
+            compute_runtime_plan(graph, &config.plan_policy()).expect("runtime plan failed");
         let src_step = runtime
             .steps
             .iter()
@@ -9683,7 +9683,7 @@ mod tests {
         let channel_usage = collect_bridge_channel_usage(graph);
         let mut bridge_specs = build_bridge_specs(&config, graph, &channel_usage);
         let (runtime_plan, exec_entities, plan_to_original) =
-            build_execution_plan(graph, &task_specs, &mut bridge_specs, config.plan_policy())
+            build_execution_plan(graph, &task_specs, &mut bridge_specs, &config.plan_policy())
                 .expect("runtime plan failed");
         let output_packs = extract_output_packs(&runtime_plan);
         let task_names = collect_task_names(graph);

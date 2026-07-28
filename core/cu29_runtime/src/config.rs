@@ -1993,12 +1993,19 @@ pub struct LoggingCodecSpec {
 ///
 /// Every policy emits a valid topological order of the task graph; the policy
 /// only chooses among those orders. See `sched-v0.md` for the roadmap.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 pub enum PlanPolicy {
     /// The historical heuristic: BFS from the sources, a node entering the
     /// order once all of its producers are ordered. The default.
     #[default]
     TopoBfs,
+    /// Critical-path-first order over measured per-task durations, as written
+    /// by the `cu29_export` `schedule-profile` subcommand. Tasks absent from
+    /// the map weigh zero.
+    Profiled {
+        /// Measured `process()` duration per task id, in nanoseconds.
+        task_duration_ns: BTreeMap<String, u64>,
+    },
 }
 
 impl PlanPolicy {
@@ -2990,7 +2997,7 @@ impl CuConfig {
     pub fn plan_policy(&self) -> PlanPolicy {
         self.runtime
             .as_ref()
-            .map(|runtime| runtime.plan_policy)
+            .map(|runtime| runtime.plan_policy.clone())
             .unwrap_or_default()
     }
 
@@ -5691,6 +5698,25 @@ mod tests {
         )"#;
         let config = read_configuration_str(without_policy.to_string(), None).unwrap();
         assert_eq!(config.plan_policy(), PlanPolicy::default());
+    }
+
+    #[test]
+    fn test_runtime_plan_policy_parses_profiled_durations() {
+        let txt = r#"(
+            tasks: [(id: "src", type: "a"), (id: "sink", type: "b")],
+            cnx: [(src: "src", dst: "sink", msg: "msg::A")],
+            runtime: (
+                plan_policy: Profiled(task_duration_ns: {"src": 1200, "sink": 300}),
+            )
+        )"#;
+        let config = read_configuration_str(txt.to_string(), None).unwrap();
+        match config.plan_policy() {
+            PlanPolicy::Profiled { task_duration_ns } => {
+                assert_eq!(task_duration_ns.get("src"), Some(&1200));
+                assert_eq!(task_duration_ns.get("sink"), Some(&300));
+            }
+            other => panic!("unexpected policy: {other:?}"),
+        }
     }
 
     /// Builds a src -> any -> sink config with the given `anytime:` policy body,

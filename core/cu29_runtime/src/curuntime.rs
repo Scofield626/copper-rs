@@ -51,7 +51,7 @@ use cu29_value::to_value;
 #[cfg(all(feature = "std", any(feature = "async-cl-io", feature = "parallel-rt")))]
 use alloc::alloc::{alloc_zeroed, handle_alloc_error};
 use alloc::boxed::Box;
-use alloc::collections::{BTreeSet, VecDeque};
+use alloc::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -61,6 +61,7 @@ use bincode::error::EncodeError;
 use bincode::{Decode, Encode};
 #[cfg(all(feature = "std", any(feature = "async-cl-io", feature = "parallel-rt")))]
 use core::alloc::Layout;
+use core::cmp::Reverse;
 use core::fmt::Result as FmtResult;
 use core::fmt::{Debug, Formatter};
 use core::marker::PhantomData;
@@ -1928,15 +1929,105 @@ fn build_plan_from_order(graph: &CuGraph, order: &[NodeId]) -> CuResult<Vec<CuEx
     Ok(plan)
 }
 
+/// Critical-path-first list scheduling over measured task durations
+/// ([`PlanPolicy::Profiled`]): among the ready nodes, always order the one
+/// with the longest remaining critical path. Ties break on the smaller node
+/// id so the order stays deterministic. Tasks absent from the profile weigh
+/// zero.
+fn profiled_order(
+    graph: &CuGraph,
+    task_duration_ns: &BTreeMap<String, u64>,
+) -> CuResult<Vec<NodeId>> {
+    let node_ids = graph.node_ids();
+    let duration = |id: NodeId| -> u64 {
+        graph
+            .get_node(id)
+            .and_then(|node| task_duration_ns.get(node.get_id().as_str()).copied())
+            .unwrap_or(0)
+    };
+    // Distinct neighbors: parallel edges between two nodes count once.
+    let consumers = |id: NodeId| -> BTreeSet<NodeId> {
+        graph
+            .get_neighbor_ids(id, CuDirection::Outgoing)
+            .into_iter()
+            .collect()
+    };
+    let producers = |id: NodeId| -> BTreeSet<NodeId> {
+        graph
+            .get_neighbor_ids(id, CuDirection::Incoming)
+            .into_iter()
+            .collect()
+    };
+
+    // Critical path per node: its duration plus the longest path through its
+    // consumers, computed sink-to-source. Nodes on a cycle are never reached;
+    // they keep weight zero, stay unready below, and the missing-node check
+    // in `compute_runtime_plan` reports them.
+    let mut critical_path: BTreeMap<NodeId, u64> = BTreeMap::new();
+    let mut pending_consumers: BTreeMap<NodeId, usize> = BTreeMap::new();
+    let mut queue: VecDeque<NodeId> = VecDeque::new();
+    for &id in &node_ids {
+        let count = consumers(id).len();
+        pending_consumers.insert(id, count);
+        if count == 0 {
+            queue.push_back(id);
+        }
+    }
+    while let Some(id) = queue.pop_front() {
+        let downstream = consumers(id)
+            .iter()
+            .map(|consumer| critical_path.get(consumer).copied().unwrap_or(0))
+            .max()
+            .unwrap_or(0);
+        critical_path.insert(id, duration(id) + downstream);
+        for producer in producers(id) {
+            let pending = pending_consumers.get_mut(&producer).unwrap();
+            *pending -= 1;
+            if *pending == 0 {
+                queue.push_back(producer);
+            }
+        }
+    }
+
+    // List scheduling: a max-heap on (critical path, smaller node id).
+    let mut pending_producers: BTreeMap<NodeId, usize> = BTreeMap::new();
+    let mut ready: BinaryHeap<(u64, Reverse<NodeId>)> = BinaryHeap::new();
+    for &id in &node_ids {
+        let count = producers(id).len();
+        pending_producers.insert(id, count);
+        if count == 0 {
+            ready.push((critical_path.get(&id).copied().unwrap_or(0), Reverse(id)));
+        }
+    }
+
+    let mut order = Vec::with_capacity(node_ids.len());
+    while let Some((_, Reverse(id))) = ready.pop() {
+        order.push(id);
+        for consumer in consumers(id) {
+            let pending = pending_producers.get_mut(&consumer).unwrap();
+            *pending -= 1;
+            if *pending == 0 {
+                ready.push((
+                    critical_path.get(&consumer).copied().unwrap_or(0),
+                    Reverse(consumer),
+                ));
+            }
+        }
+    }
+
+    Ok(order)
+}
+
 /// This is the main entry point to compute an execution plan at compilation
 /// time. The policy picks the step order; the build phase is shared by every
 /// policy (see `sched-v0.md`).
-pub fn compute_runtime_plan(graph: &CuGraph, policy: PlanPolicy) -> CuResult<CuExecutionLoop> {
+pub fn compute_runtime_plan(graph: &CuGraph, policy: &PlanPolicy) -> CuResult<CuExecutionLoop> {
     #[cfg(all(feature = "std", feature = "macro_debug"))]
     eprintln!("[runtime plan: {policy:?}]");
 
     let order = match policy {
         PlanPolicy::TopoBfs => topo_bfs_order(graph)?,
+        PlanPolicy::Profiled { task_duration_ns } => profiled_order(graph, task_duration_ns)?,
     };
 
     let plan = build_plan_from_order(graph, &order)?;
@@ -2586,7 +2677,7 @@ mod tests {
         assert_eq!(src1_edge_id, 1);
         assert_eq!(src2_edge_id, 0);
 
-        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
+        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
         let sink_step = runtime
             .steps
             .iter()
@@ -2615,7 +2706,7 @@ mod tests {
         graph.connect(s2, fusion, "m2").unwrap();
         graph.connect(fusion, sink, "m3").unwrap();
 
-        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
+        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
 
         let order_and_slots: Vec<(NodeId, u32)> = runtime
             .steps
@@ -2637,6 +2728,80 @@ mod tests {
         );
     }
 
+    fn plan_node_order(plan: &CuExecutionLoop) -> Vec<NodeId> {
+        plan.steps
+            .iter()
+            .map(|unit| match unit {
+                CuExecutionUnit::Step(step) => step.node_id,
+                CuExecutionUnit::Loop(_) => panic!("unexpected loop in a flat plan"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_runtime_plan_profiled_policy_prioritizes_critical_path() {
+        let mut config = CuConfig::default();
+        let graph = config.get_graph_mut(None).unwrap();
+        let s1 = graph.add_node(Node::new("s1", "Source1")).unwrap();
+        let slow = graph.add_node(Node::new("slow", "Slow")).unwrap();
+        let sink1 = graph.add_node(Node::new("sink1", "Sink1")).unwrap();
+        let s2 = graph.add_node(Node::new("s2", "Source2")).unwrap();
+        let fast = graph.add_node(Node::new("fast", "Fast")).unwrap();
+        let sink2 = graph.add_node(Node::new("sink2", "Sink2")).unwrap();
+
+        graph.connect(s1, slow, "m1").unwrap();
+        graph.connect(slow, sink1, "m2").unwrap();
+        graph.connect(s2, fast, "m3").unwrap();
+        graph.connect(fast, sink2, "m4").unwrap();
+
+        // The default policy exhausts one source branch before the next.
+        let default_plan = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
+        assert_eq!(
+            plan_node_order(&default_plan),
+            vec![s1, slow, sink1, s2, fast, sink2]
+        );
+
+        let policy = PlanPolicy::Profiled {
+            task_duration_ns: [
+                ("s1".to_string(), 1),
+                ("slow".to_string(), 1000),
+                ("s2".to_string(), 1),
+                ("fast".to_string(), 10),
+            ]
+            .into_iter()
+            .collect(),
+        };
+
+        // The profiled policy runs the long chain first; the equal-weight
+        // sinks fall back to node-id order.
+        let profiled_plan = compute_runtime_plan(graph, &policy).unwrap();
+        assert_eq!(
+            plan_node_order(&profiled_plan),
+            vec![s1, slow, s2, fast, sink1, sink2]
+        );
+    }
+
+    #[test]
+    fn test_runtime_plan_profiled_policy_empty_profile_is_deterministic() {
+        let mut config = CuConfig::default();
+        let graph = config.get_graph_mut(None).unwrap();
+        let s1 = graph.add_node(Node::new("s1", "Source1")).unwrap();
+        let s2 = graph.add_node(Node::new("s2", "Source2")).unwrap();
+        let fusion = graph.add_node(Node::new("fusion", "Fusion")).unwrap();
+        let sink = graph.add_node(Node::new("sink", "Sink")).unwrap();
+
+        graph.connect(s1, fusion, "m1").unwrap();
+        graph.connect(s2, fusion, "m2").unwrap();
+        graph.connect(fusion, sink, "m3").unwrap();
+
+        // All-zero weights: ties resolve on node id, so the order is stable.
+        let policy = PlanPolicy::Profiled {
+            task_duration_ns: BTreeMap::new(),
+        };
+        let plan = compute_runtime_plan(graph, &policy).unwrap();
+        assert_eq!(plan_node_order(&plan), vec![s1, s2, fusion, sink]);
+    }
+
     #[test]
     fn test_runtime_output_ports_unique_ordered() {
         let mut config = CuConfig::default();
@@ -2652,7 +2817,7 @@ mod tests {
         graph.connect(src_id, dst_a2_id, "msg::A").unwrap();
         graph.connect(src_id, dst_c_id, "msg::C").unwrap();
 
-        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
+        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
         let src_step = runtime
             .steps
             .iter()
@@ -2715,7 +2880,7 @@ mod tests {
         graph.connect(src_id, dst_a_id, "i32").unwrap();
         graph.connect(src_id, dst_b_id, "i32").unwrap();
 
-        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
+        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
         let src_step = runtime
             .steps
             .iter()
@@ -2741,7 +2906,7 @@ mod tests {
             .expect("missing source node")
             .add_nc_output("msg::B", usize::MAX);
 
-        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
+        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
         let src_step = runtime
             .steps
             .iter()
@@ -2780,7 +2945,7 @@ mod tests {
         let graph = config.get_graph(None).unwrap();
         let regular_id = graph.get_node_id_by_name("regular").unwrap();
 
-        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
+        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
         let regular_step = runtime
             .steps
             .iter()
@@ -2811,7 +2976,7 @@ mod tests {
         let src_id = graph.get_node_id_by_name("src").unwrap();
         let dst_id = graph.get_node_id_by_name("sink").unwrap();
 
-        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
+        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
         let src_step = runtime
             .steps
             .iter()
@@ -2851,7 +3016,7 @@ mod tests {
         let src_id = graph.get_node_id_by_name("src").unwrap();
         let dst_id = graph.get_node_id_by_name("sink").unwrap();
 
-        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
+        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
         let src_step = runtime
             .steps
             .iter()
@@ -2888,7 +3053,7 @@ mod tests {
         let src_id = graph.get_node_id_by_name("src").unwrap();
         let dst_id = graph.get_node_id_by_name("sink").unwrap();
 
-        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
+        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
         let src_step = runtime
             .steps
             .iter()
@@ -2937,7 +3102,7 @@ mod tests {
         assert_eq!(edge_cam0_to_inf0, 0);
         assert_eq!(edge_cam0_to_broadcast, 1);
 
-        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
+        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
         let broadcast_step = runtime
             .steps
             .iter()
@@ -2977,7 +3142,7 @@ mod tests {
         assert_eq!(edge_cam0_to_broadcast, 0);
         assert_eq!(edge_cam0_to_inf0, 1);
 
-        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
+        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
         let broadcast_step = runtime
             .steps
             .iter()

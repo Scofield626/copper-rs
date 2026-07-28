@@ -15,6 +15,7 @@
 
 mod fsck;
 pub mod logstats;
+pub mod schedule_profile;
 
 #[cfg(feature = "mcap")]
 pub mod mcap_export;
@@ -34,6 +35,7 @@ use fsck::check;
 #[cfg(feature = "mcap")]
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use logstats::{compute_logstats, write_logstats};
+use schedule_profile::{ProfileStat, compute_schedule_profile, write_schedule_profile};
 use serde::Serialize;
 use std::fmt::{Display, Formatter};
 #[cfg(feature = "mcap")]
@@ -145,6 +147,21 @@ pub enum Command {
         /// Mission id to use when reading the config
         #[arg(long)]
         mission: Option<String>,
+    },
+    /// Export a measured `plan_policy: Profiled(...)` RON snippet (see sched-v0.md)
+    ScheduleProfile {
+        /// Output RON file path
+        #[arg(short, long, default_value = "schedule_profile.ron")]
+        output: PathBuf,
+        /// Config file used to map outputs to tasks
+        #[arg(long, default_value = "copperconfig.ron")]
+        config: PathBuf,
+        /// Mission id to use when reading the config
+        #[arg(long)]
+        mission: Option<String>,
+        /// Which statistic of the sampled durations fills the profile
+        #[arg(long, value_enum, default_value_t = ProfileStat::Mean)]
+        stat: ProfileStat,
     },
     /// Export copperlists to MCAP format (requires 'mcap' feature)
     #[cfg(feature = "mcap")]
@@ -298,6 +315,14 @@ where
         } => {
             run_logstats::<P>(dl, output, config, mission)?;
         }
+        Command::ScheduleProfile {
+            output,
+            config,
+            mission,
+            stat,
+        } => {
+            run_schedule_profile::<P>(dl, output, config, mission, stat)?;
+        }
         #[cfg(feature = "mcap")]
         Command::ExportMcap {
             output,
@@ -415,6 +440,14 @@ where
         } => {
             run_logstats::<P>(dl, output, config, mission)?;
         }
+        Command::ScheduleProfile {
+            output,
+            config,
+            mission,
+            stat,
+        } => {
+            run_schedule_profile::<P>(dl, output, config, mission, stat)?;
+        }
     }
 
     Ok(())
@@ -437,6 +470,31 @@ where
     let reader = UnifiedLoggerIOReader::new(dl, UnifiedLogType::CopperList);
     let stats = compute_logstats::<P>(reader, &cfg, mission.as_deref())?;
     write_logstats(&stats, &output)
+}
+
+fn run_schedule_profile<P>(
+    dl: UnifiedLoggerRead,
+    output: PathBuf,
+    config: PathBuf,
+    mission: Option<String>,
+    stat: ProfileStat,
+) -> CuResult<()>
+where
+    P: CopperListTuple + CuPayloadRawBytes,
+{
+    let config_path = config
+        .to_str()
+        .ok_or_else(|| CuError::from("Config path is not valid UTF-8"))?;
+    let cfg = read_configuration(config_path)
+        .map_err(|e| CuError::new_with_cause("Failed to read configuration", e))?;
+    let reader = UnifiedLoggerIOReader::new(dl, UnifiedLogType::CopperList);
+    let policy = compute_schedule_profile::<P>(reader, &cfg, mission.as_deref(), stat)?;
+    write_schedule_profile(&policy, &output)?;
+    println!(
+        "Wrote {}. Paste its content as the config's `runtime.plan_policy` value and rebuild.",
+        output.display()
+    );
+    Ok(())
 }
 
 /// Helper function for MCAP export.

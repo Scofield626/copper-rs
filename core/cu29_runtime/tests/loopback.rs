@@ -13,7 +13,7 @@ mod tests {
             read_configuration(config_path.to_str().unwrap()).expect("config should parse");
         let graph = config.get_graph(None).expect("graph should load");
         let err =
-            compute_runtime_plan(graph, PlanPolicy::default()).expect_err("loopback should fail");
+            compute_runtime_plan(graph, &PlanPolicy::default()).expect_err("loopback should fail");
         let msg = err.to_string();
         assert!(msg.contains("loopback"), "unexpected error: {msg}");
         assert!(msg.contains("Missing"), "unexpected error: {msg}");

@@ -192,7 +192,7 @@ where
 {
     let graph = config.get_graph(mission)?;
     let signature = build_graph_signature(graph, mission);
-    let output_slots = build_output_slots(graph, config.plan_policy())?;
+    let output_slots = build_output_slots(graph, &config.plan_policy())?;
     let mut edge_accumulators = build_edge_accumulators(graph);
     let mut perf = PerfAccumulator::new();
     let mut warned_lengths = false;
@@ -253,7 +253,7 @@ pub fn write_logstats(stats: &LogStats, path: &Path) -> CuResult<()> {
     Ok(())
 }
 
-fn build_output_slots(graph: &CuGraph, plan_policy: PlanPolicy) -> CuResult<Vec<OutputSlot>> {
+fn build_output_slots(graph: &CuGraph, plan_policy: &PlanPolicy) -> CuResult<Vec<OutputSlot>> {
     let packs = collect_output_packs(graph, plan_policy)?;
     let edges_by_src = build_edges_by_src_msg(graph);
     let total_msgs: usize = packs.iter().map(|pack| pack.msg_types.len()).sum();
@@ -310,13 +310,16 @@ fn build_edges_by_src_msg(graph: &CuGraph) -> HashMap<SrcMsgKey, Vec<EdgeKey>> {
 }
 
 #[derive(Debug)]
-struct OutputPackInfo {
-    culist_index: u32,
-    src: String,
-    msg_types: Vec<String>,
+pub(crate) struct OutputPackInfo {
+    pub(crate) culist_index: u32,
+    pub(crate) src: String,
+    pub(crate) msg_types: Vec<String>,
 }
 
-fn collect_output_packs(graph: &CuGraph, plan_policy: PlanPolicy) -> CuResult<Vec<OutputPackInfo>> {
+pub(crate) fn collect_output_packs(
+    graph: &CuGraph,
+    plan_policy: &PlanPolicy,
+) -> CuResult<Vec<OutputPackInfo>> {
     let plan = compute_runtime_plan(graph, plan_policy)?;
     let mut packs = Vec::new();
     collect_output_packs_from_loop(&plan, graph, &mut packs)?;
@@ -363,11 +366,11 @@ fn compute_end_to_end_latency(
     end.checked_sub(start).map(CuDuration::from_nanos)
 }
 
-fn extract_start_time_ns(meta: &dyn CuMsgMetadataTrait) -> Option<u64> {
+pub(crate) fn extract_start_time_ns(meta: &dyn CuMsgMetadataTrait) -> Option<u64> {
     option_time_ns(meta.process_time().start)
 }
 
-fn extract_end_time_ns(meta: &dyn CuMsgMetadataTrait) -> Option<u64> {
+pub(crate) fn extract_end_time_ns(meta: &dyn CuMsgMetadataTrait) -> Option<u64> {
     option_time_ns(meta.process_time().end)
 }
 
