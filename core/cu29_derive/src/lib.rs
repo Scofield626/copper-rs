@@ -17,7 +17,7 @@ use cu29_build::COPPER_CFG_FEATURES_ENV;
 use cu29_runtime::config::CuConfig;
 use cu29_runtime::config::{
     BridgeChannelConfigRepresentation, ConfigGraphs, CuGraph, Flavor, HandleContent, Node, NodeId,
-    RT_POOL, ResourceBundleConfig, read_configuration_with_features,
+    PlanPolicy, RT_POOL, ResourceBundleConfig, read_configuration_with_features,
     read_configuration_with_resolved_ron_and_features,
 };
 use cu29_runtime::curuntime::{
@@ -678,16 +678,21 @@ fn build_gen_cumsgs_support(
     let task_specs = CuTaskSpecSet::from_graph(graph)?;
     let channel_usage = collect_bridge_channel_usage(graph);
     let mut bridge_specs = build_bridge_specs(cuconfig, graph, &channel_usage);
-    let (culist_plan, exec_entities, plan_to_original) =
-        build_execution_plan(graph, &task_specs, &mut bridge_specs).map_err(|e| {
-            if let Some(mission) = mission_label {
-                CuError::from(format!(
-                    "Could not compute copperlist plan for mission '{mission}': {e}"
-                ))
-            } else {
-                CuError::from(format!("Could not compute copperlist plan: {e}"))
-            }
-        })?;
+    let (culist_plan, exec_entities, plan_to_original) = build_execution_plan(
+        graph,
+        &task_specs,
+        &mut bridge_specs,
+        cuconfig.plan_policy(),
+    )
+    .map_err(|e| {
+        if let Some(mission) = mission_label {
+            CuError::from(format!(
+                "Could not compute copperlist plan for mission '{mission}': {e}"
+            ))
+        } else {
+            CuError::from(format!("Could not compute copperlist plan: {e}"))
+        }
+    })?;
     let task_names = collect_task_names(graph);
     let (culist_order, node_output_positions) = collect_culist_metadata(
         &culist_plan,
@@ -1714,7 +1719,12 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
         let mut culist_bridge_specs =
             build_bridge_specs(&copper_config, graph, &culist_channel_usage);
         let (culist_plan, culist_exec_entities, culist_plan_to_original) =
-            match build_execution_plan(graph, &task_specs, &mut culist_bridge_specs) {
+            match build_execution_plan(
+                graph,
+                &task_specs,
+                &mut culist_bridge_specs,
+                copper_config.plan_policy(),
+            ) {
                 Ok(plan) => plan,
                 Err(e) => return return_error(format!("Could not compute copperlist plan: {e}")),
             };
@@ -7726,6 +7736,7 @@ fn build_execution_plan(
     graph: &CuGraph,
     task_specs: &CuTaskSpecSet,
     bridge_specs: &mut [BridgeSpec],
+    plan_policy: PlanPolicy,
 ) -> CuResult<(
     CuExecutionLoop,
     Vec<ExecutionEntity>,
@@ -7897,7 +7908,7 @@ fn build_execution_plan(
             .map_err(|e| CuError::from(e.to_string()))?;
     }
 
-    let runtime_plan = compute_runtime_plan(&plan_graph)?;
+    let runtime_plan = compute_runtime_plan(&plan_graph, plan_policy)?;
     Ok((runtime_plan, exec_entities, plan_to_original))
 }
 
@@ -9642,7 +9653,8 @@ mod tests {
         let graph = config.get_graph(None).expect("missing graph");
         let src_id = graph.get_node_id_by_name("src").expect("missing src node");
 
-        let runtime = compute_runtime_plan(graph).expect("runtime plan failed");
+        let runtime =
+            compute_runtime_plan(graph, config.plan_policy()).expect("runtime plan failed");
         let src_step = runtime
             .steps
             .iter()
@@ -9671,7 +9683,7 @@ mod tests {
         let channel_usage = collect_bridge_channel_usage(graph);
         let mut bridge_specs = build_bridge_specs(&config, graph, &channel_usage);
         let (runtime_plan, exec_entities, plan_to_original) =
-            build_execution_plan(graph, &task_specs, &mut bridge_specs)
+            build_execution_plan(graph, &task_specs, &mut bridge_specs, config.plan_policy())
                 .expect("runtime plan failed");
         let output_packs = extract_output_packs(&runtime_plan);
         let task_names = collect_task_names(graph);

@@ -3,7 +3,7 @@ pub use cu29::serde;
 
 #[cfg(feature = "safety-ids")]
 pub mod harness {
-    use cu29::config::{CuConfig, Node, TaskKind, resolve_task_kind_for_id};
+    use cu29::config::{CuConfig, Node, PlanPolicy, TaskKind, resolve_task_kind_for_id};
     use cu29::curuntime::{CuExecutionLoop, CuExecutionUnit, CuTaskType, compute_runtime_plan};
     use cu29::prelude::*;
     use std::path::PathBuf;
@@ -699,7 +699,7 @@ pub mod harness {
         graph.connect(src2_id, sink_id, "src2_type").unwrap();
         graph.connect(src1_id, sink_id, "src1_type").unwrap();
 
-        let runtime = compute_runtime_plan(graph).unwrap();
+        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
         let sink_step = step_for(&runtime, sink_id);
         let sink_inputs: Vec<String> = sink_step
             .input_msg_indices_types
@@ -729,7 +729,7 @@ pub mod harness {
         graph.connect(cam0_id, inf0_id, "i32").unwrap();
         graph.connect(inf0_id, broadcast_id, "f32").unwrap();
 
-        let runtime = compute_runtime_plan(graph).unwrap();
+        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
         let broadcast_step = step_for(&runtime, broadcast_id);
         let case1_inputs: Vec<String> = broadcast_step
             .input_msg_indices_types
@@ -759,7 +759,7 @@ pub mod harness {
         graph.connect(cam0_id, broadcast_id, "i32").unwrap();
         graph.connect(inf0_id, broadcast_id, "f32").unwrap();
 
-        let runtime = compute_runtime_plan(graph).unwrap();
+        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
         let broadcast_step = step_for(&runtime, broadcast_id);
         let case2_inputs: Vec<String> = broadcast_step
             .input_msg_indices_types
@@ -821,7 +821,7 @@ pub mod harness {
         graph.connect(src_id, dst_a, "i32").unwrap();
         graph.connect(src_id, dst_b, "i32").unwrap();
 
-        let runtime = compute_runtime_plan(graph).unwrap();
+        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
         let src_step = step_for(&runtime, src_id);
 
         safety_check_eq!(
@@ -844,7 +844,7 @@ pub mod harness {
         let ordered_graph = ordered.get_graph(None).unwrap();
         let ordered_src = ordered_graph.get_node_id_by_name("src").unwrap();
         let ordered_sink = ordered_graph.get_node_id_by_name("sink").unwrap();
-        let runtime = compute_runtime_plan(ordered_graph).unwrap();
+        let runtime = compute_runtime_plan(ordered_graph, PlanPolicy::default()).unwrap();
         let src_step = step_for(&runtime, ordered_src);
         let sink_step = step_for(&runtime, ordered_sink);
 
@@ -873,7 +873,7 @@ pub mod harness {
         .unwrap();
         let inferred_graph = inferred.get_graph(None).unwrap();
         let regular_id = inferred_graph.get_node_id_by_name("regular").unwrap();
-        let runtime = compute_runtime_plan(inferred_graph).unwrap();
+        let runtime = compute_runtime_plan(inferred_graph, PlanPolicy::default()).unwrap();
         let regular_step = step_for(&runtime, regular_id);
 
         safety_check_eq!(

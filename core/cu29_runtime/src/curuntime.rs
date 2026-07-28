@@ -5,7 +5,8 @@
 use crate::app::Subsystem;
 use crate::config::{ComponentConfig, CuDirection, DEFAULT_KEYFRAME_INTERVAL, Node, TaskKind};
 use crate::config::{
-    CuConfig, CuGraph, MAX_RATE_TARGET_HZ, NodeId, RuntimeConfig, resolve_task_kind_for_id,
+    CuConfig, CuGraph, MAX_RATE_TARGET_HZ, NodeId, PlanPolicy, RuntimeConfig,
+    resolve_task_kind_for_id,
 };
 use crate::copperlist::{CopperList, CopperListState, CuListZeroedInit, CuListsManager};
 use crate::cutask::{BincodeAdapter, Freezable};
@@ -1722,188 +1723,63 @@ fn sort_inputs_by_connection_order(input_msg_indices_types: &mut [CuInputMsg]) {
     input_msg_indices_types.sort_by_key(|input| input.connection_order);
 }
 
-/// Explores a subbranch and build the partial plan out of it.
-fn plan_tasks_tree_branch(
+/// Explores a subbranch and appends every node whose producers are all
+/// ordered to the order.
+fn topo_bfs_branch(
     graph: &CuGraph,
-    mut next_culist_output_index: u32,
     starting_point: NodeId,
-    plan: &mut Vec<CuExecutionUnit>,
-) -> CuResult<(u32, bool)> {
+    order: &mut Vec<NodeId>,
+) -> CuResult<bool> {
     #[cfg(all(feature = "std", feature = "macro_debug"))]
     eprintln!("-- starting branch from node {starting_point}");
 
     let mut handled = false;
 
     for id in graph.bfs_nodes(starting_point) {
-        let node_ref = graph.get_node(id).unwrap();
         #[cfg(all(feature = "std", feature = "macro_debug"))]
-        eprintln!("  Visiting node: {node_ref:?}");
+        eprintln!("  Visiting node: {id}");
 
-        let mut input_msg_indices_types: Vec<CuInputMsg> = Vec::new();
-        let output_msg_pack: Option<CuOutputPack>;
         let task_type = find_task_type_for_id(graph, id)?;
 
-        match task_type {
-            CuTaskType::Source => {
-                #[cfg(all(feature = "std", feature = "macro_debug"))]
-                eprintln!("    → Source node, assign output index {next_culist_output_index}");
-                let msg_types = graph.get_node_output_msg_types_by_id(id)?;
-                if msg_types.is_empty() {
-                    return Err(CuError::from(format!(
-                        "Source node '{}' has no declared outputs",
-                        node_ref.get_id()
-                    )));
+        if task_type != CuTaskType::Source {
+            let mut edge_ids = graph.get_dst_edges(id).unwrap_or_default();
+            edge_ids.sort();
+            for edge_id in edge_ids {
+                let edge = graph
+                    .edge(edge_id)
+                    .unwrap_or_else(|| panic!("Missing edge {edge_id} for node {id}"));
+                let pid = graph
+                    .get_node_id_by_name(edge.src.as_str())
+                    .unwrap_or_else(|| {
+                        panic!("Missing source node '{}' for edge {edge_id}", edge.src)
+                    });
+                if !order.contains(&pid) {
+                    #[cfg(all(feature = "std", feature = "macro_debug"))]
+                    eprintln!("      ✗ Input from {pid} not ready, returning");
+                    return Ok(handled);
                 }
-                output_msg_pack = Some(CuOutputPack {
-                    culist_index: next_culist_output_index,
-                    msg_types,
-                });
-                next_culist_output_index += 1;
-            }
-            CuTaskType::Sink => {
-                let mut edge_ids = graph.get_dst_edges(id).unwrap_or_default();
-                edge_ids.sort();
-                #[cfg(all(feature = "std", feature = "macro_debug"))]
-                eprintln!("    → Sink with incoming edges: {edge_ids:?}");
-                for edge_id in edge_ids {
-                    let edge = graph
-                        .edge(edge_id)
-                        .unwrap_or_else(|| panic!("Missing edge {edge_id} for node {id}"));
-                    let pid = graph
-                        .get_node_id_by_name(edge.src.as_str())
-                        .unwrap_or_else(|| {
-                            panic!("Missing source node '{}' for edge {edge_id}", edge.src)
-                        });
-                    let output_pack = find_output_pack_from_nodeid(pid, plan);
-                    if let Some(output_pack) = output_pack {
-                        #[cfg(all(feature = "std", feature = "macro_debug"))]
-                        eprintln!("      ✓ Input from {pid} ready: {output_pack:?}");
-                        let msg_type = edge.msg.as_str();
-                        let src_port = output_pack
-                            .msg_types
-                            .iter()
-                            .position(|msg| msg == msg_type)
-                            .unwrap_or_else(|| {
-                                panic!(
-                                    "Missing output port for message type '{msg_type}' on node {pid}"
-                                )
-                            });
-                        input_msg_indices_types.push(CuInputMsg {
-                            culist_index: output_pack.culist_index,
-                            msg_type: msg_type.to_string(),
-                            src_port,
-                            edge_id,
-                            connection_order: edge.order,
-                        });
-                    } else {
-                        #[cfg(all(feature = "std", feature = "macro_debug"))]
-                        eprintln!("      ✗ Input from {pid} not ready, returning");
-                        return Ok((next_culist_output_index, handled));
-                    }
-                }
-                output_msg_pack = Some(CuOutputPack {
-                    culist_index: next_culist_output_index,
-                    msg_types: Vec::from(["()".to_string()]),
-                });
-                next_culist_output_index += 1;
-            }
-            CuTaskType::Regular => {
-                let mut edge_ids = graph.get_dst_edges(id).unwrap_or_default();
-                edge_ids.sort();
-                #[cfg(all(feature = "std", feature = "macro_debug"))]
-                eprintln!("    → Regular task with incoming edges: {edge_ids:?}");
-                for edge_id in edge_ids {
-                    let edge = graph
-                        .edge(edge_id)
-                        .unwrap_or_else(|| panic!("Missing edge {edge_id} for node {id}"));
-                    let pid = graph
-                        .get_node_id_by_name(edge.src.as_str())
-                        .unwrap_or_else(|| {
-                            panic!("Missing source node '{}' for edge {edge_id}", edge.src)
-                        });
-                    let output_pack = find_output_pack_from_nodeid(pid, plan);
-                    if let Some(output_pack) = output_pack {
-                        #[cfg(all(feature = "std", feature = "macro_debug"))]
-                        eprintln!("      ✓ Input from {pid} ready: {output_pack:?}");
-                        let msg_type = edge.msg.as_str();
-                        let src_port = output_pack
-                            .msg_types
-                            .iter()
-                            .position(|msg| msg == msg_type)
-                            .unwrap_or_else(|| {
-                                panic!(
-                                    "Missing output port for message type '{msg_type}' on node {pid}"
-                                )
-                            });
-                        input_msg_indices_types.push(CuInputMsg {
-                            culist_index: output_pack.culist_index,
-                            msg_type: msg_type.to_string(),
-                            src_port,
-                            edge_id,
-                            connection_order: edge.order,
-                        });
-                    } else {
-                        #[cfg(all(feature = "std", feature = "macro_debug"))]
-                        eprintln!("      ✗ Input from {pid} not ready, returning");
-                        return Ok((next_culist_output_index, handled));
-                    }
-                }
-                let msg_types = graph.get_node_output_msg_types_by_id(id)?;
-                if msg_types.is_empty() {
-                    return Err(CuError::from(format!(
-                        "Regular node '{}' has no declared outputs",
-                        node_ref.get_id()
-                    )));
-                }
-                output_msg_pack = Some(CuOutputPack {
-                    culist_index: next_culist_output_index,
-                    msg_types,
-                });
-                next_culist_output_index += 1;
             }
         }
 
-        sort_inputs_by_connection_order(&mut input_msg_indices_types);
-
-        if let Some(pos) = plan
-            .iter()
-            .position(|step| matches!(step, CuExecutionUnit::Step(s) if s.node_id == id))
-        {
+        if let Some(pos) = order.iter().position(|&ordered| ordered == id) {
             #[cfg(all(feature = "std", feature = "macro_debug"))]
-            eprintln!("    → Already in plan, modifying existing step");
-            let mut step = plan.remove(pos);
-            if let CuExecutionUnit::Step(ref mut s) = step {
-                s.input_msg_indices_types = input_msg_indices_types;
-            }
-            plan.push(step);
-        } else {
-            #[cfg(all(feature = "std", feature = "macro_debug"))]
-            eprintln!("    → New step added to plan");
-            let step = CuExecutionStep {
-                node_id: id,
-                node: node_ref.clone(),
-                task_type,
-                input_msg_indices_types,
-                output_msg_pack,
-            };
-            plan.push(CuExecutionUnit::Step(Box::new(step)));
+            eprintln!("    → Already ordered, moving to the back");
+            order.remove(pos);
         }
-
+        order.push(id);
         handled = true;
     }
 
     #[cfg(all(feature = "std", feature = "macro_debug"))]
     eprintln!("-- finished branch from node {starting_point} with handled={handled}");
-    Ok((next_culist_output_index, handled))
+    Ok(handled)
 }
 
-/// This is the main heuristics to compute an execution plan at compilation time.
-/// TODO(gbin): Make that heuristic pluggable.
-pub fn compute_runtime_plan(graph: &CuGraph) -> CuResult<CuExecutionLoop> {
-    #[cfg(all(feature = "std", feature = "macro_debug"))]
-    eprintln!("[runtime plan]");
-    let mut plan = Vec::new();
-    let mut next_culist_output_index = 0u32;
+/// The historical ordering heuristic ([`PlanPolicy::TopoBfs`]): repeated BFS
+/// from each source, a node entering the order once all its producers are
+/// ordered.
+fn topo_bfs_order(graph: &CuGraph) -> CuResult<Vec<NodeId>> {
+    let mut order = Vec::new();
 
     let mut queue: VecDeque<NodeId> = VecDeque::new();
     for node_id in graph.node_ids() {
@@ -1919,22 +1795,15 @@ pub fn compute_runtime_plan(graph: &CuGraph) -> CuResult<CuExecutionLoop> {
         #[cfg(all(feature = "std", feature = "macro_debug"))]
         eprintln!("→ Starting BFS from source {start_node}");
         for node_id in graph.bfs_nodes(start_node) {
-            let already_in_plan = plan
-                .iter()
-                .any(|unit| matches!(unit, CuExecutionUnit::Step(s) if s.node_id == node_id));
-            if already_in_plan {
+            if order.contains(&node_id) {
                 #[cfg(all(feature = "std", feature = "macro_debug"))]
-                eprintln!("    → Node {node_id} already planned, skipping");
+                eprintln!("    → Node {node_id} already ordered, skipping");
                 continue;
             }
 
             #[cfg(all(feature = "std", feature = "macro_debug"))]
-            eprintln!("    Planning from node {node_id}");
-            let (new_index, handled) =
-                plan_tasks_tree_branch(graph, next_culist_output_index, node_id, &mut plan)?;
-            next_culist_output_index = new_index;
-
-            if !handled {
+            eprintln!("    Ordering from node {node_id}");
+            if !topo_bfs_branch(graph, node_id, &mut order)? {
                 #[cfg(all(feature = "std", feature = "macro_debug"))]
                 eprintln!("    ✗ Node {node_id} was not handled, skipping enqueue of neighbors");
                 continue;
@@ -1950,13 +1819,129 @@ pub fn compute_runtime_plan(graph: &CuGraph) -> CuResult<CuExecutionLoop> {
         }
     }
 
-    let mut planned_nodes = BTreeSet::new();
-    for unit in &plan {
-        if let CuExecutionUnit::Step(step) = unit {
-            planned_nodes.insert(step.node_id);
+    Ok(order)
+}
+
+/// Builds the executable steps for a step order: assigns copperlist slots in
+/// order and wires each step's inputs to its producers' packs.
+///
+/// Errors out if the order is not topological (an input's producer does not
+/// appear earlier), so a buggy ordering policy fails the build instead of
+/// generating a broken runtime.
+fn build_plan_from_order(graph: &CuGraph, order: &[NodeId]) -> CuResult<Vec<CuExecutionUnit>> {
+    let mut plan: Vec<CuExecutionUnit> = Vec::with_capacity(order.len());
+
+    for (step_index, &id) in order.iter().enumerate() {
+        // Every step consumes exactly one copperlist slot: slot == step rank.
+        let next_culist_output_index = step_index as u32;
+        let node_ref = graph.get_node(id).unwrap();
+        let mut input_msg_indices_types: Vec<CuInputMsg> = Vec::new();
+        let task_type = find_task_type_for_id(graph, id)?;
+
+        if task_type != CuTaskType::Source {
+            let mut edge_ids = graph.get_dst_edges(id).unwrap_or_default();
+            edge_ids.sort();
+            #[cfg(all(feature = "std", feature = "macro_debug"))]
+            eprintln!("    → {task_type:?} with incoming edges: {edge_ids:?}");
+            for edge_id in edge_ids {
+                let edge = graph
+                    .edge(edge_id)
+                    .unwrap_or_else(|| panic!("Missing edge {edge_id} for node {id}"));
+                let pid = graph
+                    .get_node_id_by_name(edge.src.as_str())
+                    .unwrap_or_else(|| {
+                        panic!("Missing source node '{}' for edge {edge_id}", edge.src)
+                    });
+                let output_pack = find_output_pack_from_nodeid(pid, &plan).ok_or_else(|| {
+                    CuError::from(format!(
+                        "Invalid execution order: '{}' consumes '{}' which is not ordered earlier",
+                        node_ref.get_id(),
+                        edge.src
+                    ))
+                })?;
+                #[cfg(all(feature = "std", feature = "macro_debug"))]
+                eprintln!("      ✓ Input from {pid} ready: {output_pack:?}");
+                let msg_type = edge.msg.as_str();
+                let src_port = output_pack
+                    .msg_types
+                    .iter()
+                    .position(|msg| msg == msg_type)
+                    .unwrap_or_else(|| {
+                        panic!("Missing output port for message type '{msg_type}' on node {pid}")
+                    });
+                input_msg_indices_types.push(CuInputMsg {
+                    culist_index: output_pack.culist_index,
+                    msg_type: msg_type.to_string(),
+                    src_port,
+                    edge_id,
+                    connection_order: edge.order,
+                });
+            }
         }
+
+        let output_msg_pack = match task_type {
+            CuTaskType::Source => {
+                #[cfg(all(feature = "std", feature = "macro_debug"))]
+                eprintln!("    → Source node, assign output index {next_culist_output_index}");
+                let msg_types = graph.get_node_output_msg_types_by_id(id)?;
+                if msg_types.is_empty() {
+                    return Err(CuError::from(format!(
+                        "Source node '{}' has no declared outputs",
+                        node_ref.get_id()
+                    )));
+                }
+                Some(CuOutputPack {
+                    culist_index: next_culist_output_index,
+                    msg_types,
+                })
+            }
+            CuTaskType::Sink => Some(CuOutputPack {
+                culist_index: next_culist_output_index,
+                msg_types: Vec::from(["()".to_string()]),
+            }),
+            CuTaskType::Regular => {
+                let msg_types = graph.get_node_output_msg_types_by_id(id)?;
+                if msg_types.is_empty() {
+                    return Err(CuError::from(format!(
+                        "Regular node '{}' has no declared outputs",
+                        node_ref.get_id()
+                    )));
+                }
+                Some(CuOutputPack {
+                    culist_index: next_culist_output_index,
+                    msg_types,
+                })
+            }
+        };
+
+        sort_inputs_by_connection_order(&mut input_msg_indices_types);
+
+        plan.push(CuExecutionUnit::Step(Box::new(CuExecutionStep {
+            node_id: id,
+            node: node_ref.clone(),
+            task_type,
+            input_msg_indices_types,
+            output_msg_pack,
+        })));
     }
 
+    Ok(plan)
+}
+
+/// This is the main entry point to compute an execution plan at compilation
+/// time. The policy picks the step order; the build phase is shared by every
+/// policy (see `sched-v0.md`).
+pub fn compute_runtime_plan(graph: &CuGraph, policy: PlanPolicy) -> CuResult<CuExecutionLoop> {
+    #[cfg(all(feature = "std", feature = "macro_debug"))]
+    eprintln!("[runtime plan: {policy:?}]");
+
+    let order = match policy {
+        PlanPolicy::TopoBfs => topo_bfs_order(graph)?,
+    };
+
+    let plan = build_plan_from_order(graph, &order)?;
+
+    let planned_nodes: BTreeSet<NodeId> = order.iter().copied().collect();
     let mut missing = Vec::new();
     for node_id in graph.node_ids() {
         if !planned_nodes.contains(&node_id) {
@@ -2601,7 +2586,7 @@ mod tests {
         assert_eq!(src1_edge_id, 1);
         assert_eq!(src2_edge_id, 0);
 
-        let runtime = compute_runtime_plan(graph).unwrap();
+        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
         let sink_step = runtime
             .steps
             .iter()
@@ -2615,6 +2600,41 @@ mod tests {
         // first
         assert_eq!(sink_step.input_msg_indices_types[0].msg_type, src2_type);
         assert_eq!(sink_step.input_msg_indices_types[1].msg_type, src1_type);
+    }
+
+    #[test]
+    fn test_runtime_plan_default_policy_golden_order() {
+        let mut config = CuConfig::default();
+        let graph = config.get_graph_mut(None).unwrap();
+        let s1 = graph.add_node(Node::new("s1", "Source1")).unwrap();
+        let s2 = graph.add_node(Node::new("s2", "Source2")).unwrap();
+        let fusion = graph.add_node(Node::new("fusion", "Fusion")).unwrap();
+        let sink = graph.add_node(Node::new("sink", "Sink")).unwrap();
+
+        graph.connect(s1, fusion, "m1").unwrap();
+        graph.connect(s2, fusion, "m2").unwrap();
+        graph.connect(fusion, sink, "m3").unwrap();
+
+        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
+
+        let order_and_slots: Vec<(NodeId, u32)> = runtime
+            .steps
+            .iter()
+            .map(|unit| match unit {
+                CuExecutionUnit::Step(step) => (
+                    step.node_id,
+                    step.output_msg_pack.as_ref().unwrap().culist_index,
+                ),
+                CuExecutionUnit::Loop(_) => panic!("unexpected loop in a flat plan"),
+            })
+            .collect();
+
+        // Golden default-policy plan: the fusion waits for both sources, the
+        // copperlist slots follow the step order.
+        assert_eq!(
+            order_and_slots,
+            vec![(s1, 0), (s2, 1), (fusion, 2), (sink, 3)]
+        );
     }
 
     #[test]
@@ -2632,7 +2652,7 @@ mod tests {
         graph.connect(src_id, dst_a2_id, "msg::A").unwrap();
         graph.connect(src_id, dst_c_id, "msg::C").unwrap();
 
-        let runtime = compute_runtime_plan(graph).unwrap();
+        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
         let src_step = runtime
             .steps
             .iter()
@@ -2695,7 +2715,7 @@ mod tests {
         graph.connect(src_id, dst_a_id, "i32").unwrap();
         graph.connect(src_id, dst_b_id, "i32").unwrap();
 
-        let runtime = compute_runtime_plan(graph).unwrap();
+        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
         let src_step = runtime
             .steps
             .iter()
@@ -2721,7 +2741,7 @@ mod tests {
             .expect("missing source node")
             .add_nc_output("msg::B", usize::MAX);
 
-        let runtime = compute_runtime_plan(graph).unwrap();
+        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
         let src_step = runtime
             .steps
             .iter()
@@ -2760,7 +2780,7 @@ mod tests {
         let graph = config.get_graph(None).unwrap();
         let regular_id = graph.get_node_id_by_name("regular").unwrap();
 
-        let runtime = compute_runtime_plan(graph).unwrap();
+        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
         let regular_step = runtime
             .steps
             .iter()
@@ -2791,7 +2811,7 @@ mod tests {
         let src_id = graph.get_node_id_by_name("src").unwrap();
         let dst_id = graph.get_node_id_by_name("sink").unwrap();
 
-        let runtime = compute_runtime_plan(graph).unwrap();
+        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
         let src_step = runtime
             .steps
             .iter()
@@ -2831,7 +2851,7 @@ mod tests {
         let src_id = graph.get_node_id_by_name("src").unwrap();
         let dst_id = graph.get_node_id_by_name("sink").unwrap();
 
-        let runtime = compute_runtime_plan(graph).unwrap();
+        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
         let src_step = runtime
             .steps
             .iter()
@@ -2868,7 +2888,7 @@ mod tests {
         let src_id = graph.get_node_id_by_name("src").unwrap();
         let dst_id = graph.get_node_id_by_name("sink").unwrap();
 
-        let runtime = compute_runtime_plan(graph).unwrap();
+        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
         let src_step = runtime
             .steps
             .iter()
@@ -2917,7 +2937,7 @@ mod tests {
         assert_eq!(edge_cam0_to_inf0, 0);
         assert_eq!(edge_cam0_to_broadcast, 1);
 
-        let runtime = compute_runtime_plan(graph).unwrap();
+        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
         let broadcast_step = runtime
             .steps
             .iter()
@@ -2957,7 +2977,7 @@ mod tests {
         assert_eq!(edge_cam0_to_broadcast, 0);
         assert_eq!(edge_cam0_to_inf0, 1);
 
-        let runtime = compute_runtime_plan(graph).unwrap();
+        let runtime = compute_runtime_plan(graph, PlanPolicy::default()).unwrap();
         let broadcast_step = runtime
             .steps
             .iter()
