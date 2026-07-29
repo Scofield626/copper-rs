@@ -7,7 +7,7 @@
 //! (see `sched-v0.md`).
 
 use crate::copperlists_reader;
-use crate::logstats::{collect_output_packs, extract_end_time_ns, extract_start_time_ns};
+use crate::logstats::{build_pack_ranges, collect_output_packs, sample_step_duration_ns};
 use cu29::config::{CuConfig, PlanProfile};
 use cu29::prelude::{CopperListTuple, CuPayloadRawBytes};
 use cu29::{CuError, CuResult};
@@ -27,13 +27,6 @@ pub enum ProfileStat {
     Max,
 }
 
-/// One task's flattened slot range in the copperlist message vector.
-struct PackRange {
-    start: usize,
-    len: usize,
-    task: String,
-}
-
 pub fn compute_schedule_profile<P>(
     mut reader: impl Read,
     config: &CuConfig,
@@ -45,38 +38,13 @@ where
 {
     let graph = config.get_graph(mission)?;
     let packs = collect_output_packs(graph, config.plan_policy(), &config.plan_profile())?;
-
-    // The copperlist message vector flattens the packs in slot order.
-    let mut ranges = Vec::with_capacity(packs.len());
-    let mut base = 0usize;
-    for pack in &packs {
-        ranges.push(PackRange {
-            start: base,
-            len: pack.msg_types.len(),
-            task: pack.src.clone(),
-        });
-        base += pack.msg_types.len();
-    }
+    let ranges = build_pack_ranges(&packs);
 
     let mut samples: BTreeMap<String, Vec<u64>> = BTreeMap::new();
     for culist in copperlists_reader::<P>(&mut reader) {
         let cumsgs = culist.msgs.cumsgs();
         for range in &ranges {
-            let mut start_ns: Option<u64> = None;
-            let mut end_ns: Option<u64> = None;
-            let end_slot = (range.start + range.len).min(cumsgs.len());
-            for msg in &cumsgs[range.start.min(end_slot)..end_slot] {
-                let meta = msg.metadata();
-                if let Some(start) = extract_start_time_ns(meta) {
-                    start_ns = Some(start_ns.map_or(start, |current| current.min(start)));
-                }
-                if let Some(end) = extract_end_time_ns(meta) {
-                    end_ns = Some(end_ns.map_or(end, |current| current.max(end)));
-                }
-            }
-            if let (Some(start), Some(end)) = (start_ns, end_ns)
-                && let Some(duration) = end.checked_sub(start)
-            {
+            if let Some(duration) = sample_step_duration_ns(&cumsgs, range) {
                 samples
                     .entry(range.task.clone())
                     .or_default()

@@ -122,6 +122,43 @@ Later consumers of the same profile data are worth more: placing anytime
 refine quanta into measured gaps (once anytime tasks land), and core packing
 for `parallel-rt`.
 
+## What the profile buys `parallel-rt` (v2)
+
+`parallel-rt` is a stage-affine pipeline: one worker thread per plan step
+(`cu29_derive/src/lib.rs`), each pinned to `cores[stage_index % cores.len()]`
+(`thread_pool.rs`). Two consequences decide what the profile is worth there:
+
+- Pipeline throughput is the duration of the **slowest single step**, not the
+  sum. Reordering steps cannot change a maximum, so `CriticalPathFirst` buys
+  `parallel-rt` essentially nothing. Ordering is a latency tool; parallel-rt
+  needs a *balance* tool.
+- Worker count equals step count, independent of core count. A 20-step graph
+  on 4 cores spawns 20 threads.
+
+Three uses of the same `PlanProfile`, cheapest first. None of them belongs in
+`PlanPolicy` — they are placement, not ordering.
+
+1. **Report the ceiling (done).** `cu29_export <log> log-stats` now emits a
+   `pipeline` section: per-step duration stats, `serial_cycle_ns` (the serial
+   engine's cycle), `bottleneck` (the slowest step, i.e. the `parallel-rt`
+   cycle), and `max_pipeline_speedup = serial_cycle_ns / bottleneck.mean_ns`.
+   The CLI prints the bottleneck line to stdout. This is diagnosis, not
+   scheduling: it says whether steps 2 and 3 are worth doing at all. A graph
+   whose `max_pipeline_speedup` is 1.2x will not repay a pipelining engine.
+2. **Profile-driven core packing.** Replace the `stage_index % cores.len()`
+   round-robin with an LPT bin-pack over `task_duration_ns`, so per-core load
+   is balanced when steps outnumber cores. Self-contained in `thread_pool.rs`.
+3. **Stage fusion.** Merge cheap adjacent steps into one worker until the step
+   count is near the core count: fewer queue hops, lower latency, less
+   oversubscription. This breaks the stage-index = plan-index identity in
+   `build_parallel_rt_stage_entries`, so it is the largest of the three.
+
+Note the histogram behind `CuDurationStatistics` is 1024 linear buckets over
+its configured max, so its `percentile()` is useless at microsecond scale. The
+`pipeline` section therefore reports only exact stats (min/max/mean/stddev);
+an exact percentile comes from `schedule-profile --stat p99`, which keeps the
+raw samples.
+
 ## Caveats
 
 - A different order changes the copperlist slot layout, hence the generated
@@ -135,5 +172,7 @@ for `parallel-rt`.
 - v0 (done): the order/build split, the `PlanPolicy` config surface, golden
   tests pinning the default order.
 - v1 (done): the `CriticalPathFirst` policy and the `schedule-profile` exporter.
-- Later: profile-driven placement of anytime refine quanta (once anytime
-  tasks land) and core packing for `parallel-rt`.
+- v2 (partial): the `pipeline` section of logstats reports the bottleneck and
+  the ceiling. Core packing and stage fusion for `parallel-rt` are still open.
+- Later: profile-driven placement of anytime refine quanta, once anytime tasks
+  land.

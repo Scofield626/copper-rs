@@ -34,7 +34,7 @@ use cu29_intern_strs::read_interned_strings;
 use fsck::check;
 #[cfg(feature = "mcap")]
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
-use logstats::{compute_logstats, write_logstats};
+use logstats::{compute_logstats, format_bottleneck, write_logstats};
 use schedule_profile::{ProfileStat, compute_schedule_profile, write_schedule_profile};
 use serde::Serialize;
 use std::fmt::{Display, Formatter};
@@ -469,7 +469,9 @@ where
         .map_err(|e| CuError::new_with_cause("Failed to read configuration", e))?;
     let reader = UnifiedLoggerIOReader::new(dl, UnifiedLogType::CopperList);
     let stats = compute_logstats::<P>(reader, &cfg, mission.as_deref())?;
-    write_logstats(&stats, &output)
+    write_logstats(&stats, &output)?;
+    println!("{}", format_bottleneck(&stats.pipeline));
+    Ok(())
 }
 
 fn run_schedule_profile<P>(
