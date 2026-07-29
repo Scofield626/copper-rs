@@ -5,8 +5,8 @@
 use crate::app::Subsystem;
 use crate::config::{ComponentConfig, CuDirection, DEFAULT_KEYFRAME_INTERVAL, Node, TaskKind};
 use crate::config::{
-    CuConfig, CuGraph, MAX_RATE_TARGET_HZ, NodeId, PlanPolicy, PlanProfile, RuntimeConfig,
-    resolve_task_kind_for_id,
+    CorePlacement, CuConfig, CuGraph, MAX_RATE_TARGET_HZ, NodeId, PlanPolicy, PlanProfile,
+    RuntimeConfig, resolve_task_kind_for_id,
 };
 use crate::copperlist::{CopperList, CopperListState, CuListZeroedInit, CuListsManager};
 use crate::cutask::{BincodeAdapter, Freezable};
@@ -54,6 +54,7 @@ use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
 use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::vec;
 use alloc::vec::Vec;
 use bincode::enc::EncoderImpl;
 use bincode::enc::write::{SizeWriter, SliceWriter};
@@ -2068,6 +2069,81 @@ pub fn compute_runtime_plan(
     })
 }
 
+/// Assigns every plan step to a slot of the `rt` pool's CPU affinity list.
+///
+/// Returns one slot index per step, in plan order, each in `0..slots`. The
+/// caller hands that slot to `apply_current_thread_scheduling` in place of the
+/// step index, so the historical `index % slots` spread stays reachable.
+///
+/// [`CorePlacement::LongestFirst`] is longest-processing-time-first bin
+/// packing: walk the steps heaviest first and give each to the slot with the
+/// least accumulated load. Ties break on the slot holding fewer steps, then on
+/// the lower slot index; step ties break on the lower step index. The result
+/// is therefore deterministic, and with an all-zero profile it degenerates
+/// back to the plain spread.
+///
+/// This is the second consumer of [`PlanProfile`] and it is deliberately not a
+/// [`PlanPolicy`]: reordering steps cannot change a pipeline's slowest stage,
+/// so ordering and placement answer different questions.
+pub fn place_steps_on_cores(
+    plan: &CuExecutionLoop,
+    placement: CorePlacement,
+    profile: &PlanProfile,
+    slots: usize,
+) -> CuResult<Vec<usize>> {
+    let step_count = plan.steps.len();
+    if slots == 0 {
+        return Err(CuError::from(
+            "Core placement needs at least one CPU affinity slot.",
+        ));
+    }
+    if placement.needs_profile() && profile.is_empty() {
+        return Err(CuError::from(format!(
+            "The core placement {placement:?} needs a measured profile, but runtime.plan_profile \
+             is empty. Record a log with the default placement, then run \
+             `cu29_export <log> schedule-profile` and paste its output as runtime.plan_profile."
+        )));
+    }
+
+    if placement == CorePlacement::Spread {
+        return Ok((0..step_count).map(|step| step % slots).collect());
+    }
+
+    let mut durations = Vec::with_capacity(step_count);
+    collect_step_durations(plan, profile, &mut durations);
+
+    // Heaviest first; equal weights keep plan order so the packing is stable.
+    let mut by_weight: Vec<usize> = (0..durations.len()).collect();
+    by_weight.sort_by_key(|&step| (core::cmp::Reverse(durations[step]), step));
+
+    let mut load = vec![0u128; slots];
+    let mut assigned = vec![0usize; slots];
+    let mut placement_of_step = vec![0usize; durations.len()];
+    for step in by_weight {
+        let slot = (0..slots)
+            .min_by_key(|&slot| (load[slot], assigned[slot], slot))
+            .expect("slots is non-zero");
+        load[slot] += u128::from(durations[step]);
+        assigned[slot] += 1;
+        placement_of_step[step] = slot;
+    }
+
+    Ok(placement_of_step)
+}
+
+/// Flattens the plan's measured step durations in execution order, descending
+/// into nested loops so a step's position matches its worker index.
+fn collect_step_durations(plan: &CuExecutionLoop, profile: &PlanProfile, out: &mut Vec<u64>) {
+    for unit in &plan.steps {
+        match unit {
+            CuExecutionUnit::Step(step) => {
+                out.push(profile.task_duration_ns(step.node.get_id().as_str()))
+            }
+            CuExecutionUnit::Loop(inner) => collect_step_durations(inner, profile, out),
+        }
+    }
+}
+
 //tests
 #[cfg(test)]
 mod tests {
@@ -2834,6 +2910,113 @@ mod tests {
         )
         .expect_err("empty profile should be rejected");
         assert!(err.to_string().contains("schedule-profile"));
+    }
+
+    /// A chain of `weights.len()` steps, so the plan order is the given order.
+    fn chain_plan(weights: &[(&str, u64)]) -> (CuConfig, PlanProfile) {
+        let mut config = CuConfig::default();
+        let graph = config.get_graph_mut(None).unwrap();
+        let mut previous = None;
+        for (index, (id, _)) in weights.iter().enumerate() {
+            let node = graph.add_node(Node::new(id, "T")).unwrap();
+            if let Some(previous) = previous {
+                graph.connect(previous, node, &format!("m{index}")).unwrap();
+            }
+            previous = Some(node);
+        }
+        let profile = PlanProfile {
+            task_duration_ns: weights
+                .iter()
+                .map(|(id, ns)| (id.to_string(), *ns))
+                .collect(),
+        };
+        (config, profile)
+    }
+
+    #[test]
+    fn test_core_placement_spread_is_round_robin() {
+        let (mut config, profile) = chain_plan(&[("a", 1), ("b", 2), ("c", 3), ("d", 4)]);
+        let graph = config.get_graph_mut(None).unwrap();
+        let plan =
+            compute_runtime_plan(graph, PlanPolicy::default(), &PlanProfile::default()).unwrap();
+
+        // Spread ignores the profile entirely: this is the historical mapping.
+        let slots =
+            place_steps_on_cores(&plan, CorePlacement::Spread, &PlanProfile::default(), 3).unwrap();
+        assert_eq!(slots, vec![0, 1, 2, 0]);
+        let with_profile = place_steps_on_cores(&plan, CorePlacement::Spread, &profile, 3).unwrap();
+        assert_eq!(with_profile, slots);
+    }
+
+    #[test]
+    fn test_core_placement_longest_first_balances_load() {
+        // 8+1 and 5+4 both make 9, against 9+1+5+4 = 19 spread as 9+5, 1, 4.
+        let (mut config, profile) = chain_plan(&[("a", 9), ("b", 1), ("c", 5), ("d", 4)]);
+        let graph = config.get_graph_mut(None).unwrap();
+        let plan =
+            compute_runtime_plan(graph, PlanPolicy::default(), &PlanProfile::default()).unwrap();
+
+        let slots = place_steps_on_cores(&plan, CorePlacement::LongestFirst, &profile, 2).unwrap();
+        assert_eq!(slots, vec![0, 0, 1, 1]);
+
+        let per_slot =
+            slots
+                .iter()
+                .zip([9u64, 1, 5, 4])
+                .fold(vec![0u64; 2], |mut load, (&slot, weight)| {
+                    load[slot] += weight;
+                    load
+                });
+        assert_eq!(per_slot, vec![10, 9]);
+    }
+
+    #[test]
+    fn test_core_placement_longest_first_is_deterministic_on_ties() {
+        // All-equal weights must not pile onto one core; ties fall back to the
+        // plain spread.
+        let (mut config, profile) = chain_plan(&[("a", 7), ("b", 7), ("c", 7), ("d", 7)]);
+        let graph = config.get_graph_mut(None).unwrap();
+        let plan =
+            compute_runtime_plan(graph, PlanPolicy::default(), &PlanProfile::default()).unwrap();
+
+        let slots = place_steps_on_cores(&plan, CorePlacement::LongestFirst, &profile, 2).unwrap();
+        assert_eq!(slots, vec![0, 1, 0, 1]);
+    }
+
+    #[test]
+    fn test_core_placement_longest_first_ignores_unmeasured_steps() {
+        // 'b' was never sampled: it weighs zero and lands wherever there is room.
+        let (mut config, _) = chain_plan(&[("a", 0), ("b", 0), ("c", 0)]);
+        let graph = config.get_graph_mut(None).unwrap();
+        let plan =
+            compute_runtime_plan(graph, PlanPolicy::default(), &PlanProfile::default()).unwrap();
+        let partial = PlanProfile {
+            task_duration_ns: [("a".to_string(), 100), ("c".to_string(), 10)]
+                .into_iter()
+                .collect(),
+        };
+
+        let slots = place_steps_on_cores(&plan, CorePlacement::LongestFirst, &partial, 2).unwrap();
+        assert_eq!(slots, vec![0, 1, 1]);
+    }
+
+    #[test]
+    fn test_core_placement_rejects_empty_profile_and_zero_slots() {
+        let (mut config, profile) = chain_plan(&[("a", 1), ("b", 2)]);
+        let graph = config.get_graph_mut(None).unwrap();
+        let plan =
+            compute_runtime_plan(graph, PlanPolicy::default(), &PlanProfile::default()).unwrap();
+
+        let err = place_steps_on_cores(
+            &plan,
+            CorePlacement::LongestFirst,
+            &PlanProfile::default(),
+            2,
+        )
+        .expect_err("a profile-guided placement needs a profile");
+        assert!(err.to_string().contains("schedule-profile"));
+
+        assert!(place_steps_on_cores(&plan, CorePlacement::LongestFirst, &profile, 0).is_err());
     }
 
     #[test]

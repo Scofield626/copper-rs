@@ -145,9 +145,16 @@ Three uses of the same `PlanProfile`, cheapest first. None of them belongs in
    The CLI prints the bottleneck line to stdout. This is diagnosis, not
    scheduling: it says whether steps 2 and 3 are worth doing at all. A graph
    whose `max_pipeline_speedup` is 1.2x will not repay a pipelining engine.
-2. **Profile-driven core packing.** Replace the `stage_index % cores.len()`
-   round-robin with an LPT bin-pack over `task_duration_ns`, so per-core load
-   is balanced when steps outnumber cores. Self-contained in `thread_pool.rs`.
+2. **Profile-driven core packing (done).** `runtime.core_placement` selects
+   how stage workers map onto the `rt` pool's `affinity` list:
+   `Spread` (default, `stage % cores`) or `LongestFirst`, an LPT bin-pack over
+   `task_duration_ns` — walk the steps heaviest first, give each to the least
+   loaded core. `place_steps_on_cores` computes it at compile time, since both
+   inputs are in the config, and the generated worker passes the resolved slot
+   to `apply_current_thread_scheduling` instead of its stage index. Ties break
+   on the emptier core then the lower index, so an all-zero profile degenerates
+   back to `Spread` exactly. Steps the profile never measured weigh zero, as
+   with `CriticalPathFirst`.
 3. **Stage fusion.** Merge cheap adjacent steps into one worker until the step
    count is near the core count: fewer queue hops, lower latency, less
    oversubscription. This breaks the stage-index = plan-index identity in
@@ -173,6 +180,7 @@ raw samples.
   tests pinning the default order.
 - v1 (done): the `CriticalPathFirst` policy and the `schedule-profile` exporter.
 - v2 (partial): the `pipeline` section of logstats reports the bottleneck and
-  the ceiling. Core packing and stage fusion for `parallel-rt` are still open.
+  the ceiling; `core_placement: LongestFirst` packs stage workers onto cores by
+  measured load. Stage fusion for `parallel-rt` is still open.
 - Later: profile-driven placement of anytime refine quanta, once anytime tasks
   land.

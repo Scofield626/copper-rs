@@ -98,10 +98,14 @@ fn apply_scheduling(_pool: &ThreadPool, spec: &ThreadPoolConfig) -> CuResult<()>
 }
 
 /// Applies a pool's CPU affinity and scheduling policy to the **current** thread,
-/// as worker `index` (Spread: pinned to `affinity[index % affinity.len()]`).
+/// as worker `index` (pinned to `affinity[index % affinity.len()]`).
 ///
 /// This is for worker threads that are not part of a rayon pool — notably the
 /// `parallel-rt` stage workers, which are plain `std::thread::scope` threads.
+/// Those pass the affinity slot that
+/// [`CorePlacement`](crate::config::CorePlacement) picked for their stage
+/// rather than their own stage index, so a balanced placement reaches this
+/// function already resolved and the modulo is a no-op.
 /// Behavior mirrors [`build_pool`]: [`OnError::Warn`](crate::config::OnError::Warn)
 /// logs and returns `Ok`, [`OnError::Strict`](crate::config::OnError::Strict)
 /// returns `Err`. When the `rt-scheduling` feature is off the request is ignored

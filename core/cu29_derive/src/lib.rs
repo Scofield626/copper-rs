@@ -22,7 +22,7 @@ use cu29_runtime::config::{
 };
 use cu29_runtime::curuntime::{
     CuExecutionLoop, CuExecutionStep, CuExecutionUnit, CuTaskType, compute_runtime_plan,
-    find_task_type_for_id,
+    find_task_type_for_id, place_steps_on_cores,
 };
 use cu29_traits::{CuError, CuResult};
 use proc_macro2::{Ident, Span};
@@ -3490,12 +3490,25 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                         }
                     })
                     .collect();
+            // Which affinity slot each stage worker pins to. Computed here, at
+            // compile time, because both inputs (the profile and the "rt" pool's
+            // affinity list) are in the config.
+            let stage_affinity_slots =
+                match build_stage_affinity_slots(&copper_config, &culist_plan) {
+                    Ok(slots) => slots,
+                    Err(e) => return return_error(format!("Could not place parallel stages: {e}")),
+                };
             let parallel_stage_worker_spawns: Vec<proc_macro2::TokenStream> =
                 parallel_process_step_idents
                     .iter()
                     .enumerate()
                     .map(|(stage_index, step_ident)| {
-                        let stage_index_lit = syn::Index::from(stage_index);
+                        let stage_index_lit = syn::Index::from(
+                            stage_affinity_slots
+                                .as_ref()
+                                .and_then(|slots| slots.get(stage_index).copied())
+                                .unwrap_or(stage_index),
+                        );
                         let receiver_ident =
                             format_ident!("__cu_parallel_stage_rx_{stage_index}");
                         quote! {
@@ -3520,8 +3533,9 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                                 let rt_pool = std::sync::Arc::clone(&rt_pool);
                                 scope.spawn(move || {
                                     // Apply the "rt" pool's CPU affinity / scheduling policy to
-                                    // this stage worker (Spread by stage index). On a Strict pool
-                                    // this fails the worker, which aborts the pipeline.
+                                    // this stage worker, on the affinity slot the configured
+                                    // core placement picked. On a Strict pool this fails the
+                                    // worker, which aborts the pipeline.
                                     if let Some(rt_pool) = rt_pool.as_ref()
                                         && cu29::thread_pool::apply_current_thread_scheduling(
                                             rt_pool,
@@ -4123,7 +4137,7 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                             .runtime_config
                             .thread_pools
                             .iter()
-                            .find(|pool| pool.id == cu29::config::RT_POOL)
+                            .find(|pool| pool.id == RT_POOL)
                             .cloned(),
                     );
                     #(#parallel_stage_worker_spawns)*
@@ -8008,6 +8022,39 @@ fn build_monitor_culist_component_mapping(
     Ok(mapping)
 }
 
+/// Resolves the configured [`CorePlacement`] into one affinity slot per plan
+/// step, or `None` when there is nothing to place: no `rt` pool, or an `rt`
+/// pool that declares no CPU affinity. `None` leaves the historical
+/// spread-by-stage-index behavior untouched.
+fn build_stage_affinity_slots(
+    config: &CuConfig,
+    plan: &CuExecutionLoop,
+) -> CuResult<Option<Vec<usize>>> {
+    let Some(runtime) = config.runtime.as_ref() else {
+        return Ok(None);
+    };
+    let Some(rt_pool) = runtime.thread_pools.iter().find(|pool| pool.id == RT_POOL) else {
+        return Ok(None);
+    };
+    let Some(cores) = rt_pool.affinity.as_ref().filter(|cores| !cores.is_empty()) else {
+        return Ok(None);
+    };
+
+    let slots = place_steps_on_cores(
+        plan,
+        config.core_placement(),
+        &config.plan_profile(),
+        cores.len(),
+    )?;
+    #[cfg(feature = "macro_debug")]
+    eprintln!(
+        "[core placement: {:?} over {} slots -> {slots:?}]",
+        config.core_placement(),
+        cores.len()
+    );
+    Ok(Some(slots))
+}
+
 fn build_parallel_rt_stage_entries(
     runtime_plan: &CuExecutionLoop,
     exec_entities: &[ExecutionEntity],
@@ -9670,6 +9717,61 @@ mod tests {
         assert_eq!(
             src_step.output_msg_pack.as_ref().unwrap().msg_types,
             vec!["i32", "bool"]
+        );
+    }
+
+    #[test]
+    fn core_placement_packs_stages_onto_the_rt_pool_affinity() {
+        use super::*;
+        use cu29::config::CuConfig;
+
+        let mut config: CuConfig =
+            read_config("tests/config/core_placement_valid.ron").expect("failed to read config");
+        let graph = config.get_graph(None).expect("missing graph");
+        let plan = compute_runtime_plan(graph, config.plan_policy(), &config.plan_profile())
+            .expect("runtime plan failed");
+
+        // Plan order is src(1000) heavy(9000) light(500) sink(4000) over two
+        // cores: LPT packs heavy alone and the other three together.
+        let slots = build_stage_affinity_slots(&config, &plan)
+            .expect("placement failed")
+            .expect("an rt pool with affinity must produce a placement");
+        assert_eq!(slots, vec![1, 0, 1, 1]);
+
+        // Without a placement request the historical spread is kept implicit:
+        // every stage keeps its own index.
+        config.runtime.as_mut().unwrap().core_placement = cu29::config::CorePlacement::Spread;
+        let spread = build_stage_affinity_slots(&config, &plan)
+            .expect("placement failed")
+            .expect("an rt pool with affinity must produce a placement");
+        assert_eq!(spread, vec![0, 1, 0, 1]);
+    }
+
+    #[test]
+    fn core_placement_is_skipped_without_an_affinity_list() {
+        use super::*;
+        use cu29::config::CuConfig;
+
+        let mut config: CuConfig =
+            read_config("tests/config/core_placement_valid.ron").expect("failed to read config");
+        let graph = config.get_graph(None).expect("missing graph");
+        let plan = compute_runtime_plan(graph, config.plan_policy(), &config.plan_profile())
+            .expect("runtime plan failed");
+
+        // An rt pool that pins nothing has no slots to balance across.
+        config.runtime.as_mut().unwrap().thread_pools[0].affinity = None;
+        assert!(
+            build_stage_affinity_slots(&config, &plan)
+                .expect("placement failed")
+                .is_none()
+        );
+
+        // Neither has a config without an rt pool at all.
+        config.runtime.as_mut().unwrap().thread_pools.clear();
+        assert!(
+            build_stage_affinity_slots(&config, &plan)
+                .expect("placement failed")
+                .is_none()
         );
     }
 

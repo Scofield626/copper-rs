@@ -2020,6 +2020,39 @@ impl PlanPolicy {
     }
 }
 
+/// How `parallel-rt` stage workers map onto the `rt` pool's CPU affinity list.
+///
+/// Like [`PlanPolicy`], every variant names an algorithm; the measurement it
+/// reads lives in [`PlanProfile`]. This is placement, not ordering: it decides
+/// *where* a step runs, never *when*.
+///
+/// Ignored when the `parallel-rt` feature is off, or when the `rt` pool
+/// declares no affinity — there is nothing to place in either case.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CorePlacement {
+    /// Worker `i` pins to `affinity[i % affinity.len()]`. The historical
+    /// behavior and the default. Ignores the profile.
+    #[default]
+    Spread,
+    /// Longest-processing-time-first bin packing: order the steps heaviest
+    /// first and give each to the least loaded core. Balances per-core load
+    /// when steps outnumber cores. Needs a non-empty [`PlanProfile`].
+    LongestFirst,
+}
+
+impl CorePlacement {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Whether this algorithm reads [`PlanProfile`] and therefore needs a
+    /// non-empty one.
+    #[allow(dead_code)] // The rendercfg bin doesn't plan, only the lib does.
+    pub fn needs_profile(&self) -> bool {
+        matches!(self, Self::LongestFirst)
+    }
+}
+
 /// Measured task timings that feed profile-guided planning.
 ///
 /// The profile is an input, not a policy: it is orthogonal to which algorithm
@@ -2071,10 +2104,16 @@ pub struct RuntimeConfig {
     #[serde(default, skip_serializing_if = "PlanPolicy::is_default")]
     pub plan_policy: PlanPolicy,
 
-    /// Measured task timings feeding [`PlanPolicy::CriticalPathFirst`] and, later,
-    /// `parallel-rt` placement. Written by `cu29_export ... schedule-profile`.
+    /// Measured task timings feeding [`PlanPolicy::CriticalPathFirst`] and
+    /// [`CorePlacement::LongestFirst`]. Written by
+    /// `cu29_export ... schedule-profile`.
     #[serde(default, skip_serializing_if = "PlanProfile::is_empty")]
     pub plan_profile: PlanProfile,
+
+    /// How `parallel-rt` stage workers map onto the `rt` pool's CPU affinity
+    /// list (see `sched-v0.md`).
+    #[serde(default, skip_serializing_if = "CorePlacement::is_default")]
+    pub core_placement: CorePlacement,
 }
 
 /// Smallest valid real-time priority for [`SchedulingPolicy::Fifo`]/[`SchedulingPolicy::RoundRobin`].
@@ -3045,6 +3084,14 @@ impl CuConfig {
         self.runtime
             .as_ref()
             .map(|runtime| runtime.plan_profile.clone())
+            .unwrap_or_default()
+    }
+
+    #[allow(dead_code)] // The rendercfg bin doesn't plan, only the lib does.
+    pub fn core_placement(&self) -> CorePlacement {
+        self.runtime
+            .as_ref()
+            .map(|runtime| runtime.core_placement)
             .unwrap_or_default()
     }
 
