@@ -642,6 +642,14 @@ pub const DEFAULT_BACKGROUND_POOL: &str = "background";
 #[allow(dead_code)] // consumed by cu29_derive; unused in some binary targets
 pub const RT_POOL: &str = "rt";
 
+/// Schema version of the `log-stats` JSON document. Lives here because both the
+/// writer (`cu29_export::logstats`) and the reader (the `cu29-rendercfg` bin)
+/// must agree on it; keeping one copy per crate let them drift.
+///
+/// 1: edges + perf. 2: adds the `pipeline` section.
+#[allow(dead_code)] // consumed by cu29_export; unused in some binary targets
+pub const LOGSTATS_SCHEMA_VERSION: u32 = 2;
+
 /// How a task is backgrounded.
 ///
 /// Either a simple on/off flag (`background: true`), which runs the task on the
@@ -1989,6 +1997,98 @@ pub struct LoggingCodecSpec {
     pub config: Option<ComponentConfig>,
 }
 
+/// Ordering algorithm for the compile-time execution plan.
+///
+/// Every variant names an algorithm and nothing else; measured data lives in
+/// [`PlanProfile`], next to this field. Every variant emits a valid
+/// topological order of the task graph, so a policy can only pick a better or
+/// worse order, never a wrong one. See `doc/sched-v0.md` for the roadmap.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlanPolicy {
+    /// The historical heuristic: BFS from the sources, a node entering the
+    /// order once all of its producers are ordered. The default. Ignores the
+    /// profile.
+    #[default]
+    TopoBfs,
+    /// List scheduling that always picks the ready node with the longest
+    /// remaining critical path. Needs a non-empty [`PlanProfile`].
+    CriticalPathFirst,
+}
+
+impl PlanPolicy {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Whether this algorithm reads [`PlanProfile`] and therefore needs a
+    /// non-empty one.
+    #[allow(dead_code)] // The rendercfg bin doesn't plan, only the lib does.
+    pub fn needs_profile(&self) -> bool {
+        matches!(self, Self::CriticalPathFirst)
+    }
+}
+
+/// How `parallel-rt` stage workers map onto the `rt` pool's CPU affinity list.
+///
+/// Like [`PlanPolicy`], every variant names an algorithm; the measurement it
+/// reads lives in [`PlanProfile`]. This is placement, not ordering: it decides
+/// *where* a step runs, never *when*.
+///
+/// Ignored when the `parallel-rt` feature is off, or when the `rt` pool
+/// declares no affinity — there is nothing to place in either case.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CorePlacement {
+    /// Worker `i` pins to `affinity[i % affinity.len()]`. The historical
+    /// behavior and the default. Ignores the profile.
+    #[default]
+    Spread,
+    /// Longest-processing-time-first bin packing: order the steps heaviest
+    /// first and give each to the least loaded core. Balances per-core load
+    /// when steps outnumber cores. Needs a non-empty [`PlanProfile`].
+    LongestFirst,
+}
+
+impl CorePlacement {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Whether this algorithm reads [`PlanProfile`] and therefore needs a
+    /// non-empty one.
+    #[allow(dead_code)] // The rendercfg bin doesn't plan, only the lib does.
+    pub fn needs_profile(&self) -> bool {
+        matches!(self, Self::LongestFirst)
+    }
+}
+
+/// Measured task timings that feed profile-guided planning.
+///
+/// The profile is an input, not a policy: it is orthogonal to which algorithm
+/// reads it, and later stages (`parallel-rt` core packing) read the same
+/// numbers. Written by the `cu29_export` `schedule-profile` subcommand and
+/// pasted inline into the config, so the unified log embeds it and offline
+/// tools recompute the exact same plan.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct PlanProfile {
+    /// Measured `process()` duration per task id, in nanoseconds. Tasks
+    /// absent from the map weigh zero.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub task_duration_ns: BTreeMap<String, u64>,
+}
+
+impl PlanProfile {
+    /// No measurement at all: every policy that needs a profile rejects this.
+    pub fn is_empty(&self) -> bool {
+        self.task_duration_ns.is_empty()
+    }
+
+    /// Measured duration of `task_id`, zero when the task was never sampled.
+    #[allow(dead_code)] // The rendercfg bin doesn't plan, only the lib does.
+    pub fn task_duration_ns(&self, task_id: &str) -> u64 {
+        self.task_duration_ns.get(task_id).copied().unwrap_or(0)
+    }
+}
+
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct RuntimeConfig {
     /// Set a CopperList execution rate target in Hz
@@ -2007,6 +2107,21 @@ pub struct RuntimeConfig {
     /// threads and this section is ignored.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub thread_pools: Vec<ThreadPoolConfig>,
+
+    /// Ordering algorithm for the compile-time execution plan (see `doc/sched-v0.md`).
+    #[serde(default, skip_serializing_if = "PlanPolicy::is_default")]
+    pub plan_policy: PlanPolicy,
+
+    /// Measured task timings feeding [`PlanPolicy::CriticalPathFirst`] and
+    /// [`CorePlacement::LongestFirst`]. Written by
+    /// `cu29_export ... schedule-profile`.
+    #[serde(default, skip_serializing_if = "PlanProfile::is_empty")]
+    pub plan_profile: PlanProfile,
+
+    /// How `parallel-rt` stage workers map onto the `rt` pool's CPU affinity
+    /// list (see `doc/sched-v0.md`).
+    #[serde(default, skip_serializing_if = "CorePlacement::is_default")]
+    pub core_placement: CorePlacement,
 }
 
 /// Smallest valid real-time priority for [`SchedulingPolicy::Fifo`]/[`SchedulingPolicy::RoundRobin`].
@@ -2961,6 +3076,31 @@ impl CuConfig {
     #[allow(dead_code)]
     pub fn get_runtime_config(&self) -> Option<&RuntimeConfig> {
         self.runtime.as_ref()
+    }
+
+    /// The execution-plan ordering policy of this config (`runtime.plan_policy`).
+    #[allow(dead_code)]
+    pub fn plan_policy(&self) -> PlanPolicy {
+        self.runtime
+            .as_ref()
+            .map(|runtime| runtime.plan_policy)
+            .unwrap_or_default()
+    }
+
+    #[allow(dead_code)] // The rendercfg bin doesn't plan, only the lib does.
+    pub fn plan_profile(&self) -> PlanProfile {
+        self.runtime
+            .as_ref()
+            .map(|runtime| runtime.plan_profile.clone())
+            .unwrap_or_default()
+    }
+
+    #[allow(dead_code)] // The rendercfg bin doesn't plan, only the lib does.
+    pub fn core_placement(&self) -> CorePlacement {
+        self.runtime
+            .as_ref()
+            .map(|runtime| runtime.core_placement)
+            .unwrap_or_default()
     }
 
     #[allow(dead_code)]
@@ -5642,6 +5782,59 @@ mod tests {
             err.to_string().contains("exceeds the supported maximum"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn test_runtime_plan_policy_parses_and_defaults() {
+        let with_policy = r#"(
+            tasks: [(id: "src", type: "a"), (id: "sink", type: "b")],
+            cnx: [(src: "src", dst: "sink", msg: "msg::A")],
+            runtime: (plan_policy: TopoBfs)
+        )"#;
+        let config = read_configuration_str(with_policy.to_string(), None).unwrap();
+        assert_eq!(config.plan_policy(), PlanPolicy::TopoBfs);
+
+        let without_policy = r#"(
+            tasks: [(id: "src", type: "a"), (id: "sink", type: "b")],
+            cnx: [(src: "src", dst: "sink", msg: "msg::A")],
+        )"#;
+        let config = read_configuration_str(without_policy.to_string(), None).unwrap();
+        assert_eq!(config.plan_policy(), PlanPolicy::default());
+    }
+
+    #[test]
+    fn test_runtime_plan_profile_parses_independently_of_the_policy() {
+        let txt = r#"(
+            tasks: [(id: "src", type: "a"), (id: "sink", type: "b")],
+            cnx: [(src: "src", dst: "sink", msg: "msg::A")],
+            runtime: (
+                plan_policy: CriticalPathFirst,
+                plan_profile: (task_duration_ns: {"src": 1200, "sink": 300}),
+            )
+        )"#;
+        let config = read_configuration_str(txt.to_string(), None).unwrap();
+        assert_eq!(config.plan_policy(), PlanPolicy::CriticalPathFirst);
+        let profile = config.plan_profile();
+        assert_eq!(profile.task_duration_ns("src"), 1200);
+        assert_eq!(profile.task_duration_ns("sink"), 300);
+        // An unsampled task weighs zero rather than failing the lookup.
+        assert_eq!(profile.task_duration_ns("absent"), 0);
+    }
+
+    #[test]
+    fn test_runtime_plan_profile_is_orthogonal_to_the_policy() {
+        // The default policy ignores the profile, but still round-trips it, so
+        // switching policy needs no re-measurement.
+        let txt = r#"(
+            tasks: [(id: "src", type: "a"), (id: "sink", type: "b")],
+            cnx: [(src: "src", dst: "sink", msg: "msg::A")],
+            runtime: (
+                plan_profile: (task_duration_ns: {"src": 42}),
+            )
+        )"#;
+        let config = read_configuration_str(txt.to_string(), None).unwrap();
+        assert_eq!(config.plan_policy(), PlanPolicy::TopoBfs);
+        assert_eq!(config.plan_profile().task_duration_ns("src"), 42);
     }
 
     /// Builds a src -> any -> sink config with the given `anytime:` policy body,

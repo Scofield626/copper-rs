@@ -1,0 +1,25 @@
+(
+    tasks: [
+        (id: "src", type: "tasks::Source"),
+        (id: "heavy", type: "tasks::Heavy"),
+        (id: "light", type: "tasks::Light"),
+        (id: "sink", type: "tasks::Sink"),
+    ],
+    cnx: [
+        (src: "src", dst: "heavy", msg: "i32"),
+        (src: "heavy", dst: "light", msg: "i32"),
+        (src: "light", dst: "sink", msg: "i32"),
+    ],
+    runtime: (
+        thread_pools: [
+            (id: "rt", threads: 2, affinity: [2, 3]),
+        ],
+        core_placement: LongestFirst,
+        plan_profile: (task_duration_ns: {
+            "src": 1000,
+            "heavy": 9000,
+            "light": 500,
+            "sink": 4000,
+        }),
+    ),
+)

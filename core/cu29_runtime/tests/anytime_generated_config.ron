@@ -1,0 +1,32 @@
+(
+    tasks: [
+        (
+            id: "range_source",
+            type: "RangeSource",
+        ),
+        (
+            id: "refiner",
+            type: "Refiner",
+            anytime: (
+                max_age_ms: 50.0,
+                max_refines: 3,
+            ),
+        ),
+        (
+            id: "sink",
+            type: "RecordingSink",
+        ),
+    ],
+    cnx: [
+        (
+            src: "range_source",
+            dst: "refiner",
+            msg: "u32",
+        ),
+        (
+            src: "refiner",
+            dst: "sink",
+            msg: "u32",
+        ),
+    ],
+)

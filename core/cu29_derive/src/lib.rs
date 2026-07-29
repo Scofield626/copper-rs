@@ -16,13 +16,13 @@ use crate::utils::{config_id_to_bridge_const, config_id_to_enum, config_id_to_st
 use cu29_build::COPPER_CFG_FEATURES_ENV;
 use cu29_runtime::config::CuConfig;
 use cu29_runtime::config::{
-    BridgeChannelConfigRepresentation, ConfigGraphs, CuGraph, Flavor, HandleContent, Node, NodeId,
-    RT_POOL, ResourceBundleConfig, read_configuration_with_features,
-    read_configuration_with_resolved_ron_and_features,
+    BridgeChannelConfigRepresentation, ConfigGraphs, CorePlacement, CuGraph, Flavor, HandleContent,
+    Node, NodeId, PlanPolicy, PlanProfile, RT_POOL, ResourceBundleConfig,
+    read_configuration_with_features, read_configuration_with_resolved_ron_and_features,
 };
 use cu29_runtime::curuntime::{
     CuExecutionLoop, CuExecutionStep, CuExecutionUnit, CuTaskType, compute_runtime_plan,
-    find_task_type_for_id,
+    find_task_type_for_id, place_steps_on_cores,
 };
 use cu29_traits::{CuError, CuResult};
 use proc_macro2::{Ident, Span};
@@ -678,16 +678,22 @@ fn build_gen_cumsgs_support(
     let task_specs = CuTaskSpecSet::from_graph(graph)?;
     let channel_usage = collect_bridge_channel_usage(graph);
     let mut bridge_specs = build_bridge_specs(cuconfig, graph, &channel_usage);
-    let (culist_plan, exec_entities, plan_to_original) =
-        build_execution_plan(graph, &task_specs, &mut bridge_specs).map_err(|e| {
-            if let Some(mission) = mission_label {
-                CuError::from(format!(
-                    "Could not compute copperlist plan for mission '{mission}': {e}"
-                ))
-            } else {
-                CuError::from(format!("Could not compute copperlist plan: {e}"))
-            }
-        })?;
+    let (culist_plan, exec_entities, plan_to_original) = build_execution_plan(
+        graph,
+        &task_specs,
+        &mut bridge_specs,
+        cuconfig.plan_policy(),
+        &cuconfig.plan_profile(),
+    )
+    .map_err(|e| {
+        if let Some(mission) = mission_label {
+            CuError::from(format!(
+                "Could not compute copperlist plan for mission '{mission}': {e}"
+            ))
+        } else {
+            CuError::from(format!("Could not compute copperlist plan: {e}"))
+        }
+    })?;
     let task_names = collect_task_names(graph);
     let (culist_order, node_output_positions) = collect_culist_metadata(
         &culist_plan,
@@ -1714,7 +1720,13 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
         let mut culist_bridge_specs =
             build_bridge_specs(&copper_config, graph, &culist_channel_usage);
         let (culist_plan, culist_exec_entities, culist_plan_to_original) =
-            match build_execution_plan(graph, &task_specs, &mut culist_bridge_specs) {
+            match build_execution_plan(
+                graph,
+                &task_specs,
+                &mut culist_bridge_specs,
+                copper_config.plan_policy(),
+                &copper_config.plan_profile(),
+            ) {
                 Ok(plan) => plan,
                 Err(e) => return return_error(format!("Could not compute copperlist plan: {e}")),
             };
@@ -3478,12 +3490,25 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                         }
                     })
                     .collect();
+            // Which affinity slot each stage worker pins to. Computed here, at
+            // compile time, because both inputs (the profile and the "rt" pool's
+            // affinity list) are in the config.
+            let stage_affinity_slots =
+                match build_stage_affinity_slots(&copper_config, &culist_plan) {
+                    Ok(slots) => slots,
+                    Err(e) => return return_error(format!("Could not place parallel stages: {e}")),
+                };
             let parallel_stage_worker_spawns: Vec<proc_macro2::TokenStream> =
                 parallel_process_step_idents
                     .iter()
                     .enumerate()
                     .map(|(stage_index, step_ident)| {
-                        let stage_index_lit = syn::Index::from(stage_index);
+                        let stage_index_lit = syn::Index::from(
+                            stage_affinity_slots
+                                .as_ref()
+                                .and_then(|slots| slots.get(stage_index).copied())
+                                .unwrap_or(stage_index),
+                        );
                         let receiver_ident =
                             format_ident!("__cu_parallel_stage_rx_{stage_index}");
                         quote! {
@@ -3508,8 +3533,9 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                                 let rt_pool = std::sync::Arc::clone(&rt_pool);
                                 scope.spawn(move || {
                                     // Apply the "rt" pool's CPU affinity / scheduling policy to
-                                    // this stage worker (Spread by stage index). On a Strict pool
-                                    // this fails the worker, which aborts the pipeline.
+                                    // this stage worker, on the affinity slot the configured
+                                    // core placement picked. On a Strict pool this fails the
+                                    // worker, which aborts the pipeline.
                                     if let Some(rt_pool) = rt_pool.as_ref()
                                         && cu29::thread_pool::apply_current_thread_scheduling(
                                             rt_pool,
@@ -7726,6 +7752,8 @@ fn build_execution_plan(
     graph: &CuGraph,
     task_specs: &CuTaskSpecSet,
     bridge_specs: &mut [BridgeSpec],
+    plan_policy: PlanPolicy,
+    plan_profile: &PlanProfile,
 ) -> CuResult<(
     CuExecutionLoop,
     Vec<ExecutionEntity>,
@@ -7897,7 +7925,7 @@ fn build_execution_plan(
             .map_err(|e| CuError::from(e.to_string()))?;
     }
 
-    let runtime_plan = compute_runtime_plan(&plan_graph)?;
+    let runtime_plan = compute_runtime_plan(&plan_graph, plan_policy, plan_profile)?;
     Ok((runtime_plan, exec_entities, plan_to_original))
 }
 
@@ -7992,6 +8020,61 @@ fn build_monitor_culist_component_mapping(
         }
     }
     Ok(mapping)
+}
+
+/// Resolves the configured [`CorePlacement`] into one affinity slot per plan
+/// step, or `None` when there is nothing to place: no `rt` pool, or an `rt`
+/// pool that declares no CPU affinity. `None` leaves the historical
+/// spread-by-stage-index behavior untouched.
+///
+/// A non-default placement with nothing to place is a config mistake, not a
+/// silent fallback: it errors out the same way an empty profile does.
+fn build_stage_affinity_slots(
+    config: &CuConfig,
+    plan: &CuExecutionLoop,
+) -> CuResult<Option<Vec<usize>>> {
+    let placement = config.core_placement();
+    let no_slots = |reason: String| -> CuResult<Option<Vec<usize>>> {
+        if placement == CorePlacement::default() {
+            return Ok(None);
+        }
+        Err(CuError::from(format!(
+            "The core placement {placement:?} has no CPU affinity slots to place onto: {reason}. \
+             Declare the cores in the '{RT_POOL}' thread pool, for example \
+             `runtime: (thread_pools: [(id: \"{RT_POOL}\", threads: 4, affinity: [0, 1, 2, 3])])`, \
+             or drop `core_placement` to keep the default {:?}.",
+            CorePlacement::default()
+        )))
+    };
+
+    let Some(runtime) = config.runtime.as_ref() else {
+        return no_slots("the config has no `runtime` section".to_string());
+    };
+    let Some(rt_pool) = runtime.thread_pools.iter().find(|pool| pool.id == RT_POOL) else {
+        return no_slots(format!("the config declares no '{RT_POOL}' thread pool"));
+    };
+    let Some(cores) = rt_pool.affinity.as_ref().filter(|cores| !cores.is_empty()) else {
+        return no_slots(format!(
+            "the '{RT_POOL}' thread pool declares an empty CPU affinity list"
+        ));
+    };
+
+    let slots = place_steps_on_cores(plan, placement, &config.plan_profile(), cores.len())?;
+    // The generated pipeline spawns exactly one stage worker per plan step, so a
+    // shorter slot list would silently leave the tail on its stage index.
+    if slots.len() != plan.steps.len() {
+        return Err(CuError::from(format!(
+            "Core placement produced {} slots for {} plan steps",
+            slots.len(),
+            plan.steps.len()
+        )));
+    }
+    #[cfg(feature = "macro_debug")]
+    eprintln!(
+        "[core placement: {placement:?} over {} slots -> {slots:?}]",
+        cores.len()
+    );
+    Ok(Some(slots))
 }
 
 fn build_parallel_rt_stage_entries(
@@ -9642,7 +9725,8 @@ mod tests {
         let graph = config.get_graph(None).expect("missing graph");
         let src_id = graph.get_node_id_by_name("src").expect("missing src node");
 
-        let runtime = compute_runtime_plan(graph).expect("runtime plan failed");
+        let runtime = compute_runtime_plan(graph, config.plan_policy(), &config.plan_profile())
+            .expect("runtime plan failed");
         let src_step = runtime
             .steps
             .iter()
@@ -9659,6 +9743,105 @@ mod tests {
     }
 
     #[test]
+    fn core_placement_packs_stages_onto_the_rt_pool_affinity() {
+        use super::*;
+        use cu29::config::CuConfig;
+
+        let mut config: CuConfig =
+            read_config("tests/config/core_placement_valid.ron").expect("failed to read config");
+        let graph = config.get_graph(None).expect("missing graph");
+        let plan = compute_runtime_plan(graph, config.plan_policy(), &config.plan_profile())
+            .expect("runtime plan failed");
+
+        // Plan order is src(1000) heavy(9000) light(500) sink(4000) over two
+        // cores: LPT packs heavy alone and the other three together.
+        let slots = build_stage_affinity_slots(&config, &plan)
+            .expect("placement failed")
+            .expect("an rt pool with affinity must produce a placement");
+        assert_eq!(slots, vec![1, 0, 1, 1]);
+
+        // Without a placement request the historical spread is kept implicit:
+        // every stage keeps its own index.
+        config.runtime.as_mut().unwrap().core_placement = cu29::config::CorePlacement::Spread;
+        let spread = build_stage_affinity_slots(&config, &plan)
+            .expect("placement failed")
+            .expect("an rt pool with affinity must produce a placement");
+        assert_eq!(spread, vec![0, 1, 0, 1]);
+    }
+
+    #[test]
+    fn default_core_placement_is_skipped_without_an_affinity_list() {
+        use super::*;
+        use cu29::config::{CorePlacement, CuConfig};
+
+        let mut config: CuConfig =
+            read_config("tests/config/core_placement_valid.ron").expect("failed to read config");
+        let graph = config.get_graph(None).expect("missing graph");
+        let plan = compute_runtime_plan(graph, config.plan_policy(), &config.plan_profile())
+            .expect("runtime plan failed");
+        config.runtime.as_mut().unwrap().core_placement = CorePlacement::Spread;
+
+        // An rt pool that pins nothing has no slots to balance across.
+        config.runtime.as_mut().unwrap().thread_pools[0].affinity = None;
+        assert!(
+            build_stage_affinity_slots(&config, &plan)
+                .expect("placement failed")
+                .is_none()
+        );
+
+        // Neither has a config without an rt pool at all.
+        config.runtime.as_mut().unwrap().thread_pools.clear();
+        assert!(
+            build_stage_affinity_slots(&config, &plan)
+                .expect("placement failed")
+                .is_none()
+        );
+
+        // ... nor one without a runtime section.
+        config.runtime = None;
+        assert!(
+            build_stage_affinity_slots(&config, &plan)
+                .expect("placement failed")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn requested_core_placement_without_slots_fails_the_build() {
+        use super::*;
+        use cu29::config::CuConfig;
+
+        let mut config: CuConfig =
+            read_config("tests/config/core_placement_valid.ron").expect("failed to read config");
+        let graph = config.get_graph(None).expect("missing graph");
+        let plan = compute_runtime_plan(graph, config.plan_policy(), &config.plan_profile())
+            .expect("runtime plan failed");
+
+        // `core_placement: LongestFirst` with nothing to place onto is a config
+        // mistake, not a silent fallback to the historical spread. Dropping the
+        // whole `runtime` section drops the request with it, so it is not in
+        // this list.
+        for strip in [
+            (|config: &mut CuConfig| {
+                config.runtime.as_mut().unwrap().thread_pools[0].affinity = None
+            }) as fn(&mut CuConfig),
+            |config: &mut CuConfig| {
+                config.runtime.as_mut().unwrap().thread_pools[0].affinity = Some(Vec::new())
+            },
+            |config: &mut CuConfig| config.runtime.as_mut().unwrap().thread_pools.clear(),
+        ] {
+            let mut config = config.clone();
+            strip(&mut config);
+            let err = build_stage_affinity_slots(&config, &plan)
+                .expect_err("a requested placement with no slots must fail");
+            assert!(
+                err.to_string().contains("LongestFirst"),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn matching_task_ids_are_flattened_per_output_message() {
         use super::*;
         use cu29::config::CuConfig;
@@ -9670,9 +9853,14 @@ mod tests {
         let task_specs = CuTaskSpecSet::from_graph(graph).expect("task specs");
         let channel_usage = collect_bridge_channel_usage(graph);
         let mut bridge_specs = build_bridge_specs(&config, graph, &channel_usage);
-        let (runtime_plan, exec_entities, plan_to_original) =
-            build_execution_plan(graph, &task_specs, &mut bridge_specs)
-                .expect("runtime plan failed");
+        let (runtime_plan, exec_entities, plan_to_original) = build_execution_plan(
+            graph,
+            &task_specs,
+            &mut bridge_specs,
+            config.plan_policy(),
+            &config.plan_profile(),
+        )
+        .expect("runtime plan failed");
         let output_packs = extract_output_packs(&runtime_plan);
         let task_names = collect_task_names(graph);
         let (_, node_output_positions) = collect_culist_metadata(
