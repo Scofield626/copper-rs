@@ -1,6 +1,6 @@
 use crate::copperlists_reader;
 use cu29::clock::{CuDuration, OptionCuTime};
-use cu29::config::{CuConfig, CuGraph, Flavor, PlanPolicy};
+use cu29::config::{CuConfig, CuGraph, Flavor, PlanPolicy, PlanProfile};
 use cu29::curuntime::{CuExecutionLoop, CuExecutionUnit, compute_runtime_plan};
 use cu29::monitoring::CuDurationStatistics;
 use cu29::prelude::{CopperListTuple, CuMsgMetadataTrait, CuPayloadRawBytes};
@@ -192,7 +192,7 @@ where
 {
     let graph = config.get_graph(mission)?;
     let signature = build_graph_signature(graph, mission);
-    let output_slots = build_output_slots(graph, &config.plan_policy())?;
+    let output_slots = build_output_slots(graph, config.plan_policy(), &config.plan_profile())?;
     let mut edge_accumulators = build_edge_accumulators(graph);
     let mut perf = PerfAccumulator::new();
     let mut warned_lengths = false;
@@ -253,8 +253,12 @@ pub fn write_logstats(stats: &LogStats, path: &Path) -> CuResult<()> {
     Ok(())
 }
 
-fn build_output_slots(graph: &CuGraph, plan_policy: &PlanPolicy) -> CuResult<Vec<OutputSlot>> {
-    let packs = collect_output_packs(graph, plan_policy)?;
+fn build_output_slots(
+    graph: &CuGraph,
+    plan_policy: PlanPolicy,
+    plan_profile: &PlanProfile,
+) -> CuResult<Vec<OutputSlot>> {
+    let packs = collect_output_packs(graph, plan_policy, plan_profile)?;
     let edges_by_src = build_edges_by_src_msg(graph);
     let total_msgs: usize = packs.iter().map(|pack| pack.msg_types.len()).sum();
     let mut slots = Vec::with_capacity(total_msgs);
@@ -318,9 +322,10 @@ pub(crate) struct OutputPackInfo {
 
 pub(crate) fn collect_output_packs(
     graph: &CuGraph,
-    plan_policy: &PlanPolicy,
+    plan_policy: PlanPolicy,
+    plan_profile: &PlanProfile,
 ) -> CuResult<Vec<OutputPackInfo>> {
-    let plan = compute_runtime_plan(graph, plan_policy)?;
+    let plan = compute_runtime_plan(graph, plan_policy, plan_profile)?;
     let mut packs = Vec::new();
     collect_output_packs_from_loop(&plan, graph, &mut packs)?;
     packs.sort_by_key(|pack| pack.culist_index);

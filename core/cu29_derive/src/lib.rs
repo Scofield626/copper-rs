@@ -17,7 +17,7 @@ use cu29_build::COPPER_CFG_FEATURES_ENV;
 use cu29_runtime::config::CuConfig;
 use cu29_runtime::config::{
     BridgeChannelConfigRepresentation, ConfigGraphs, CuGraph, Flavor, HandleContent, Node, NodeId,
-    PlanPolicy, RT_POOL, ResourceBundleConfig, read_configuration_with_features,
+    PlanPolicy, PlanProfile, RT_POOL, ResourceBundleConfig, read_configuration_with_features,
     read_configuration_with_resolved_ron_and_features,
 };
 use cu29_runtime::curuntime::{
@@ -682,7 +682,8 @@ fn build_gen_cumsgs_support(
         graph,
         &task_specs,
         &mut bridge_specs,
-        &cuconfig.plan_policy(),
+        cuconfig.plan_policy(),
+        &cuconfig.plan_profile(),
     )
     .map_err(|e| {
         if let Some(mission) = mission_label {
@@ -1723,7 +1724,8 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                 graph,
                 &task_specs,
                 &mut culist_bridge_specs,
-                &copper_config.plan_policy(),
+                copper_config.plan_policy(),
+                &copper_config.plan_profile(),
             ) {
                 Ok(plan) => plan,
                 Err(e) => return return_error(format!("Could not compute copperlist plan: {e}")),
@@ -7736,7 +7738,8 @@ fn build_execution_plan(
     graph: &CuGraph,
     task_specs: &CuTaskSpecSet,
     bridge_specs: &mut [BridgeSpec],
-    plan_policy: &PlanPolicy,
+    plan_policy: PlanPolicy,
+    plan_profile: &PlanProfile,
 ) -> CuResult<(
     CuExecutionLoop,
     Vec<ExecutionEntity>,
@@ -7908,7 +7911,7 @@ fn build_execution_plan(
             .map_err(|e| CuError::from(e.to_string()))?;
     }
 
-    let runtime_plan = compute_runtime_plan(&plan_graph, plan_policy)?;
+    let runtime_plan = compute_runtime_plan(&plan_graph, plan_policy, plan_profile)?;
     Ok((runtime_plan, exec_entities, plan_to_original))
 }
 
@@ -9653,8 +9656,8 @@ mod tests {
         let graph = config.get_graph(None).expect("missing graph");
         let src_id = graph.get_node_id_by_name("src").expect("missing src node");
 
-        let runtime =
-            compute_runtime_plan(graph, &config.plan_policy()).expect("runtime plan failed");
+        let runtime = compute_runtime_plan(graph, config.plan_policy(), &config.plan_profile())
+            .expect("runtime plan failed");
         let src_step = runtime
             .steps
             .iter()
@@ -9682,9 +9685,14 @@ mod tests {
         let task_specs = CuTaskSpecSet::from_graph(graph).expect("task specs");
         let channel_usage = collect_bridge_channel_usage(graph);
         let mut bridge_specs = build_bridge_specs(&config, graph, &channel_usage);
-        let (runtime_plan, exec_entities, plan_to_original) =
-            build_execution_plan(graph, &task_specs, &mut bridge_specs, &config.plan_policy())
-                .expect("runtime plan failed");
+        let (runtime_plan, exec_entities, plan_to_original) = build_execution_plan(
+            graph,
+            &task_specs,
+            &mut bridge_specs,
+            config.plan_policy(),
+            &config.plan_profile(),
+        )
+        .expect("runtime plan failed");
         let output_packs = extract_output_packs(&runtime_plan);
         let task_names = collect_task_names(graph);
         let (_, node_output_positions) = collect_culist_metadata(

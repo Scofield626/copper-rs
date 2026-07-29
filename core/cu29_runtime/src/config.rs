@@ -1989,28 +1989,62 @@ pub struct LoggingCodecSpec {
     pub config: Option<ComponentConfig>,
 }
 
-/// Ordering policy for the compile-time execution plan.
+/// Ordering algorithm for the compile-time execution plan.
 ///
-/// Every policy emits a valid topological order of the task graph; the policy
-/// only chooses among those orders. See `sched-v0.md` for the roadmap.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+/// Every variant names an algorithm and nothing else; measured data lives in
+/// [`PlanProfile`], next to this field. Every variant emits a valid
+/// topological order of the task graph, so a policy can only pick a better or
+/// worse order, never a wrong one. See `sched-v0.md` for the roadmap.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PlanPolicy {
     /// The historical heuristic: BFS from the sources, a node entering the
-    /// order once all of its producers are ordered. The default.
+    /// order once all of its producers are ordered. The default. Ignores the
+    /// profile.
     #[default]
     TopoBfs,
-    /// Critical-path-first order over measured per-task durations, as written
-    /// by the `cu29_export` `schedule-profile` subcommand. Tasks absent from
-    /// the map weigh zero.
-    Profiled {
-        /// Measured `process()` duration per task id, in nanoseconds.
-        task_duration_ns: BTreeMap<String, u64>,
-    },
+    /// List scheduling that always picks the ready node with the longest
+    /// remaining critical path. Needs a non-empty [`PlanProfile`].
+    CriticalPathFirst,
 }
 
 impl PlanPolicy {
     fn is_default(&self) -> bool {
         *self == Self::default()
+    }
+
+    /// Whether this algorithm reads [`PlanProfile`] and therefore needs a
+    /// non-empty one.
+    #[allow(dead_code)] // The rendercfg bin doesn't plan, only the lib does.
+    pub fn needs_profile(&self) -> bool {
+        matches!(self, Self::CriticalPathFirst)
+    }
+}
+
+/// Measured task timings that feed profile-guided planning.
+///
+/// The profile is an input, not a policy: it is orthogonal to which algorithm
+/// reads it, and later stages (`parallel-rt` core packing) read the same
+/// numbers. Written by the `cu29_export` `schedule-profile` subcommand and
+/// pasted inline into the config, so the unified log embeds it and offline
+/// tools recompute the exact same plan.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct PlanProfile {
+    /// Measured `process()` duration per task id, in nanoseconds. Tasks
+    /// absent from the map weigh zero.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub task_duration_ns: BTreeMap<String, u64>,
+}
+
+impl PlanProfile {
+    /// No measurement at all: every policy that needs a profile rejects this.
+    pub fn is_empty(&self) -> bool {
+        self.task_duration_ns.is_empty()
+    }
+
+    /// Measured duration of `task_id`, zero when the task was never sampled.
+    #[allow(dead_code)] // The rendercfg bin doesn't plan, only the lib does.
+    pub fn task_duration_ns(&self, task_id: &str) -> u64 {
+        self.task_duration_ns.get(task_id).copied().unwrap_or(0)
     }
 }
 
@@ -2033,9 +2067,14 @@ pub struct RuntimeConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub thread_pools: Vec<ThreadPoolConfig>,
 
-    /// Ordering policy for the compile-time execution plan (see `sched-v0.md`).
+    /// Ordering algorithm for the compile-time execution plan (see `sched-v0.md`).
     #[serde(default, skip_serializing_if = "PlanPolicy::is_default")]
     pub plan_policy: PlanPolicy,
+
+    /// Measured task timings feeding [`PlanPolicy::CriticalPathFirst`] and, later,
+    /// `parallel-rt` placement. Written by `cu29_export ... schedule-profile`.
+    #[serde(default, skip_serializing_if = "PlanProfile::is_empty")]
+    pub plan_profile: PlanProfile,
 }
 
 /// Smallest valid real-time priority for [`SchedulingPolicy::Fifo`]/[`SchedulingPolicy::RoundRobin`].
@@ -2997,7 +3036,15 @@ impl CuConfig {
     pub fn plan_policy(&self) -> PlanPolicy {
         self.runtime
             .as_ref()
-            .map(|runtime| runtime.plan_policy.clone())
+            .map(|runtime| runtime.plan_policy)
+            .unwrap_or_default()
+    }
+
+    #[allow(dead_code)] // The rendercfg bin doesn't plan, only the lib does.
+    pub fn plan_profile(&self) -> PlanProfile {
+        self.runtime
+            .as_ref()
+            .map(|runtime| runtime.plan_profile.clone())
             .unwrap_or_default()
     }
 
@@ -5701,22 +5748,38 @@ mod tests {
     }
 
     #[test]
-    fn test_runtime_plan_policy_parses_profiled_durations() {
+    fn test_runtime_plan_profile_parses_independently_of_the_policy() {
         let txt = r#"(
             tasks: [(id: "src", type: "a"), (id: "sink", type: "b")],
             cnx: [(src: "src", dst: "sink", msg: "msg::A")],
             runtime: (
-                plan_policy: Profiled(task_duration_ns: {"src": 1200, "sink": 300}),
+                plan_policy: CriticalPathFirst,
+                plan_profile: (task_duration_ns: {"src": 1200, "sink": 300}),
             )
         )"#;
         let config = read_configuration_str(txt.to_string(), None).unwrap();
-        match config.plan_policy() {
-            PlanPolicy::Profiled { task_duration_ns } => {
-                assert_eq!(task_duration_ns.get("src"), Some(&1200));
-                assert_eq!(task_duration_ns.get("sink"), Some(&300));
-            }
-            other => panic!("unexpected policy: {other:?}"),
-        }
+        assert_eq!(config.plan_policy(), PlanPolicy::CriticalPathFirst);
+        let profile = config.plan_profile();
+        assert_eq!(profile.task_duration_ns("src"), 1200);
+        assert_eq!(profile.task_duration_ns("sink"), 300);
+        // An unsampled task weighs zero rather than failing the lookup.
+        assert_eq!(profile.task_duration_ns("absent"), 0);
+    }
+
+    #[test]
+    fn test_runtime_plan_profile_is_orthogonal_to_the_policy() {
+        // The default policy ignores the profile, but still round-trips it, so
+        // switching policy needs no re-measurement.
+        let txt = r#"(
+            tasks: [(id: "src", type: "a"), (id: "sink", type: "b")],
+            cnx: [(src: "src", dst: "sink", msg: "msg::A")],
+            runtime: (
+                plan_profile: (task_duration_ns: {"src": 42}),
+            )
+        )"#;
+        let config = read_configuration_str(txt.to_string(), None).unwrap();
+        assert_eq!(config.plan_policy(), PlanPolicy::TopoBfs);
+        assert_eq!(config.plan_profile().task_duration_ns("src"), 42);
     }
 
     /// Builds a src -> any -> sink config with the given `anytime:` policy body,

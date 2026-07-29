@@ -32,14 +32,23 @@ generating a broken runtime.
 
 ## Config surface
 
-A new enum next to the other runtime policies in `config.rs`:
+Two independent fields in `config.rs`: *which algorithm* and *what it
+measured*. A variant names an algorithm and nothing else; measurement is a
+separate struct, because the same numbers feed more than one consumer.
 
 ```rust
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PlanPolicy {
-    /// The historical source-BFS order. The default.
+    /// The historical source-BFS order. The default. Ignores the profile.
     #[default]
     TopoBfs,
+    /// Longest-remaining-critical-path first. Needs a profile.
+    CriticalPathFirst,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct PlanProfile {
+    pub task_duration_ns: BTreeMap<String, u64>,
 }
 ```
 
@@ -48,8 +57,22 @@ RON:
 ```ron
 runtime: (
     plan_policy: TopoBfs,
+    plan_profile: (task_duration_ns: {"cam": 1200, "detect": 8400}),
 ),
 ```
+
+**Why the profile is not a variant field.** Folding the measurement into
+`CriticalPathFirst(task_duration_ns: ...)` names the *input* where a variant
+should name the *algorithm*, and it forces every future profile-guided
+algorithm to repeat the same field. Keeping them apart means adding
+`LongestTaskFirst` or `MinSlack` costs one unit variant, switching policy
+needs no re-measurement, and `parallel-rt` placement can read the same
+`PlanProfile` without going through a policy at all.
+
+Both fields are optional. `plan_policy` defaults to `TopoBfs`, whose output is
+byte-identical to the historical planner. A policy with `needs_profile()` and
+an empty `plan_profile` fails the build with a message pointing at
+`schedule-profile` — a config mistake, not a silent fallback to another order.
 
 The field is optional and defaults to `TopoBfs`; v0 output is byte-identical
 to the current planner (same order, same copperlist indices).
@@ -68,7 +91,8 @@ cannot have a profile. The loop that resolves it:
 
 ```
 build (TopoBfs) → run robot or resim → export profile
-      → paste Profiled policy into RON → rebuild → compare logstats → repeat
+      → paste plan_profile into RON, set plan_policy → rebuild
+      → compare logstats → repeat
 ```
 
 - **No new instrumentation.** Every `CuMsg` already records the
@@ -77,14 +101,15 @@ build (TopoBfs) → run robot or resim → export profile
 - **Exporter.** `cu29_export <log> schedule-profile [--config copperconfig.ron]
   [--mission M] [--stat mean|p99|max]` reads the log and writes
   `schedule_profile.ron`: the exact RON value of the config's
-  `runtime.plan_policy` field.
-- **Policy.** `Profiled(task_duration_ns: {"task": ns, ...})` carries the
-  measured durations *inline in the config* — there is no separate profile
-  file at build time. The heuristic is critical-path-first list scheduling:
+  `runtime.plan_profile` field. It writes a profile, never a policy — picking
+  the algorithm stays the user's decision.
+- **Policy.** `CriticalPathFirst` is critical-path-first list scheduling:
   among the ready nodes, always order the one with the longest remaining
-  critical path. Ties break on the smaller node id, so the order is
-  deterministic. Tasks absent from the map (including generated bridge
-  channel nodes) weigh zero.
+  critical path, weighing each node with `plan_profile.task_duration_ns`. Ties
+  break on the smaller node id, so the order is deterministic. Tasks absent
+  from the map (including generated bridge channel nodes) weigh zero, which
+  keeps a partial profile usable.
+- **Durations live inline in the config**, not in a separate build-time file.
 
 Inlining the profile is what keeps offline readers exact: the unified log
 embeds the config, so logstats recomputes the same plan from the same data.
@@ -109,6 +134,6 @@ for `parallel-rt`.
 
 - v0 (done): the order/build split, the `PlanPolicy` config surface, golden
   tests pinning the default order.
-- v1 (done): the `Profiled` policy and the `schedule-profile` exporter.
+- v1 (done): the `CriticalPathFirst` policy and the `schedule-profile` exporter.
 - Later: profile-driven placement of anytime refine quanta (once anytime
   tasks land) and core packing for `parallel-rt`.

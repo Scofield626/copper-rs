@@ -5,7 +5,7 @@
 use crate::app::Subsystem;
 use crate::config::{ComponentConfig, CuDirection, DEFAULT_KEYFRAME_INTERVAL, Node, TaskKind};
 use crate::config::{
-    CuConfig, CuGraph, MAX_RATE_TARGET_HZ, NodeId, PlanPolicy, RuntimeConfig,
+    CuConfig, CuGraph, MAX_RATE_TARGET_HZ, NodeId, PlanPolicy, PlanProfile, RuntimeConfig,
     resolve_task_kind_for_id,
 };
 use crate::copperlist::{CopperList, CopperListState, CuListZeroedInit, CuListsManager};
@@ -1930,19 +1930,16 @@ fn build_plan_from_order(graph: &CuGraph, order: &[NodeId]) -> CuResult<Vec<CuEx
 }
 
 /// Critical-path-first list scheduling over measured task durations
-/// ([`PlanPolicy::Profiled`]): among the ready nodes, always order the one
-/// with the longest remaining critical path. Ties break on the smaller node
+/// ([`PlanPolicy::CriticalPathFirst`]): among the ready nodes, always order the
+/// one with the longest remaining critical path. Ties break on the smaller node
 /// id so the order stays deterministic. Tasks absent from the profile weigh
 /// zero.
-fn profiled_order(
-    graph: &CuGraph,
-    task_duration_ns: &BTreeMap<String, u64>,
-) -> CuResult<Vec<NodeId>> {
+fn critical_path_first_order(graph: &CuGraph, profile: &PlanProfile) -> CuResult<Vec<NodeId>> {
     let node_ids = graph.node_ids();
     let duration = |id: NodeId| -> u64 {
         graph
             .get_node(id)
-            .and_then(|node| task_duration_ns.get(node.get_id().as_str()).copied())
+            .map(|node| profile.task_duration_ns(node.get_id().as_str()))
             .unwrap_or(0)
     };
     // Distinct neighbors: parallel edges between two nodes count once.
@@ -2019,15 +2016,28 @@ fn profiled_order(
 }
 
 /// This is the main entry point to compute an execution plan at compilation
-/// time. The policy picks the step order; the build phase is shared by every
-/// policy (see `sched-v0.md`).
-pub fn compute_runtime_plan(graph: &CuGraph, policy: &PlanPolicy) -> CuResult<CuExecutionLoop> {
+/// time. The policy picks the step order, reading `profile` when it is a
+/// profile-guided one; the build phase is shared by every policy (see
+/// `sched-v0.md`).
+pub fn compute_runtime_plan(
+    graph: &CuGraph,
+    policy: PlanPolicy,
+    profile: &PlanProfile,
+) -> CuResult<CuExecutionLoop> {
     #[cfg(all(feature = "std", feature = "macro_debug"))]
     eprintln!("[runtime plan: {policy:?}]");
 
+    if policy.needs_profile() && profile.is_empty() {
+        return Err(CuError::from(format!(
+            "The plan policy {policy:?} needs a measured profile, but runtime.plan_profile is \
+             empty. Record a log with the default policy, then run \
+             `cu29_export <log> schedule-profile` and paste its output as runtime.plan_profile."
+        )));
+    }
+
     let order = match policy {
         PlanPolicy::TopoBfs => topo_bfs_order(graph)?,
-        PlanPolicy::Profiled { task_duration_ns } => profiled_order(graph, task_duration_ns)?,
+        PlanPolicy::CriticalPathFirst => critical_path_first_order(graph, profile)?,
     };
 
     let plan = build_plan_from_order(graph, &order)?;
@@ -2677,7 +2687,8 @@ mod tests {
         assert_eq!(src1_edge_id, 1);
         assert_eq!(src2_edge_id, 0);
 
-        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
+        let runtime =
+            compute_runtime_plan(graph, PlanPolicy::default(), &PlanProfile::default()).unwrap();
         let sink_step = runtime
             .steps
             .iter()
@@ -2706,7 +2717,8 @@ mod tests {
         graph.connect(s2, fusion, "m2").unwrap();
         graph.connect(fusion, sink, "m3").unwrap();
 
-        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
+        let runtime =
+            compute_runtime_plan(graph, PlanPolicy::default(), &PlanProfile::default()).unwrap();
 
         let order_and_slots: Vec<(NodeId, u32)> = runtime
             .steps
@@ -2739,7 +2751,7 @@ mod tests {
     }
 
     #[test]
-    fn test_runtime_plan_profiled_policy_prioritizes_critical_path() {
+    fn test_runtime_plan_critical_path_first_prioritizes_critical_path() {
         let mut config = CuConfig::default();
         let graph = config.get_graph_mut(None).unwrap();
         let s1 = graph.add_node(Node::new("s1", "Source1")).unwrap();
@@ -2755,13 +2767,14 @@ mod tests {
         graph.connect(fast, sink2, "m4").unwrap();
 
         // The default policy exhausts one source branch before the next.
-        let default_plan = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
+        let default_plan =
+            compute_runtime_plan(graph, PlanPolicy::default(), &PlanProfile::default()).unwrap();
         assert_eq!(
             plan_node_order(&default_plan),
             vec![s1, slow, sink1, s2, fast, sink2]
         );
 
-        let policy = PlanPolicy::Profiled {
+        let profile = PlanProfile {
             task_duration_ns: [
                 ("s1".to_string(), 1),
                 ("slow".to_string(), 1000),
@@ -2772,17 +2785,18 @@ mod tests {
             .collect(),
         };
 
-        // The profiled policy runs the long chain first; the equal-weight
+        // The critical-path-first policy runs the long chain first; the equal-weight
         // sinks fall back to node-id order.
-        let profiled_plan = compute_runtime_plan(graph, &policy).unwrap();
+        let cpf_plan =
+            compute_runtime_plan(graph, PlanPolicy::CriticalPathFirst, &profile).unwrap();
         assert_eq!(
-            plan_node_order(&profiled_plan),
+            plan_node_order(&cpf_plan),
             vec![s1, slow, s2, fast, sink1, sink2]
         );
     }
 
     #[test]
-    fn test_runtime_plan_profiled_policy_empty_profile_is_deterministic() {
+    fn test_runtime_plan_critical_path_first_partial_profile_is_deterministic() {
         let mut config = CuConfig::default();
         let graph = config.get_graph_mut(None).unwrap();
         let s1 = graph.add_node(Node::new("s1", "Source1")).unwrap();
@@ -2794,12 +2808,32 @@ mod tests {
         graph.connect(s2, fusion, "m2").unwrap();
         graph.connect(fusion, sink, "m3").unwrap();
 
-        // All-zero weights: ties resolve on node id, so the order is stable.
-        let policy = PlanPolicy::Profiled {
-            task_duration_ns: BTreeMap::new(),
+        // Only `sink` was sampled, so both sources weigh zero and share the
+        // same critical path: ties resolve on node id and the order is stable.
+        let profile = PlanProfile {
+            task_duration_ns: [("sink".to_string(), 5)].into_iter().collect(),
         };
-        let plan = compute_runtime_plan(graph, &policy).unwrap();
+        let plan = compute_runtime_plan(graph, PlanPolicy::CriticalPathFirst, &profile).unwrap();
         assert_eq!(plan_node_order(&plan), vec![s1, s2, fusion, sink]);
+    }
+
+    #[test]
+    fn test_runtime_plan_critical_path_first_rejects_empty_profile() {
+        let mut config = CuConfig::default();
+        let graph = config.get_graph_mut(None).unwrap();
+        let src = graph.add_node(Node::new("src", "Source")).unwrap();
+        let sink = graph.add_node(Node::new("sink", "Sink")).unwrap();
+        graph.connect(src, sink, "m1").unwrap();
+
+        // A profile-guided policy without a profile is a config mistake, not a
+        // silent fallback to another order.
+        let err = compute_runtime_plan(
+            graph,
+            PlanPolicy::CriticalPathFirst,
+            &PlanProfile::default(),
+        )
+        .expect_err("empty profile should be rejected");
+        assert!(err.to_string().contains("schedule-profile"));
     }
 
     #[test]
@@ -2817,7 +2851,8 @@ mod tests {
         graph.connect(src_id, dst_a2_id, "msg::A").unwrap();
         graph.connect(src_id, dst_c_id, "msg::C").unwrap();
 
-        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
+        let runtime =
+            compute_runtime_plan(graph, PlanPolicy::default(), &PlanProfile::default()).unwrap();
         let src_step = runtime
             .steps
             .iter()
@@ -2880,7 +2915,8 @@ mod tests {
         graph.connect(src_id, dst_a_id, "i32").unwrap();
         graph.connect(src_id, dst_b_id, "i32").unwrap();
 
-        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
+        let runtime =
+            compute_runtime_plan(graph, PlanPolicy::default(), &PlanProfile::default()).unwrap();
         let src_step = runtime
             .steps
             .iter()
@@ -2906,7 +2942,8 @@ mod tests {
             .expect("missing source node")
             .add_nc_output("msg::B", usize::MAX);
 
-        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
+        let runtime =
+            compute_runtime_plan(graph, PlanPolicy::default(), &PlanProfile::default()).unwrap();
         let src_step = runtime
             .steps
             .iter()
@@ -2945,7 +2982,8 @@ mod tests {
         let graph = config.get_graph(None).unwrap();
         let regular_id = graph.get_node_id_by_name("regular").unwrap();
 
-        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
+        let runtime =
+            compute_runtime_plan(graph, PlanPolicy::default(), &PlanProfile::default()).unwrap();
         let regular_step = runtime
             .steps
             .iter()
@@ -2976,7 +3014,8 @@ mod tests {
         let src_id = graph.get_node_id_by_name("src").unwrap();
         let dst_id = graph.get_node_id_by_name("sink").unwrap();
 
-        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
+        let runtime =
+            compute_runtime_plan(graph, PlanPolicy::default(), &PlanProfile::default()).unwrap();
         let src_step = runtime
             .steps
             .iter()
@@ -3016,7 +3055,8 @@ mod tests {
         let src_id = graph.get_node_id_by_name("src").unwrap();
         let dst_id = graph.get_node_id_by_name("sink").unwrap();
 
-        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
+        let runtime =
+            compute_runtime_plan(graph, PlanPolicy::default(), &PlanProfile::default()).unwrap();
         let src_step = runtime
             .steps
             .iter()
@@ -3053,7 +3093,8 @@ mod tests {
         let src_id = graph.get_node_id_by_name("src").unwrap();
         let dst_id = graph.get_node_id_by_name("sink").unwrap();
 
-        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
+        let runtime =
+            compute_runtime_plan(graph, PlanPolicy::default(), &PlanProfile::default()).unwrap();
         let src_step = runtime
             .steps
             .iter()
@@ -3102,7 +3143,8 @@ mod tests {
         assert_eq!(edge_cam0_to_inf0, 0);
         assert_eq!(edge_cam0_to_broadcast, 1);
 
-        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
+        let runtime =
+            compute_runtime_plan(graph, PlanPolicy::default(), &PlanProfile::default()).unwrap();
         let broadcast_step = runtime
             .steps
             .iter()
@@ -3142,7 +3184,8 @@ mod tests {
         assert_eq!(edge_cam0_to_broadcast, 0);
         assert_eq!(edge_cam0_to_inf0, 1);
 
-        let runtime = compute_runtime_plan(graph, &PlanPolicy::default()).unwrap();
+        let runtime =
+            compute_runtime_plan(graph, PlanPolicy::default(), &PlanProfile::default()).unwrap();
         let broadcast_step = runtime
             .steps
             .iter()

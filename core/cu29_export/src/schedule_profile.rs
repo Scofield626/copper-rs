@@ -1,13 +1,14 @@
-//! Builds a measured [`PlanPolicy::Profiled`] snippet from a recorded log.
+//! Builds a measured [`PlanProfile`] from a recorded log.
 //!
 //! Per-task durations come from the `process_time` window every message
 //! metadata already carries; no extra instrumentation is involved. The output
-//! RON is the exact value of the config's `runtime.plan_policy` field (see
-//! `sched-v0.md`).
+//! RON is the exact value of the config's `runtime.plan_profile` field, which
+//! any profile-guided [`PlanPolicy`](cu29::config::PlanPolicy) then reads
+//! (see `sched-v0.md`).
 
 use crate::copperlists_reader;
 use crate::logstats::{collect_output_packs, extract_end_time_ns, extract_start_time_ns};
-use cu29::config::{CuConfig, PlanPolicy};
+use cu29::config::{CuConfig, PlanProfile};
 use cu29::prelude::{CopperListTuple, CuPayloadRawBytes};
 use cu29::{CuError, CuResult};
 use std::collections::BTreeMap;
@@ -38,12 +39,12 @@ pub fn compute_schedule_profile<P>(
     config: &CuConfig,
     mission: Option<&str>,
     stat: ProfileStat,
-) -> CuResult<PlanPolicy>
+) -> CuResult<PlanProfile>
 where
     P: CopperListTuple + CuPayloadRawBytes,
 {
     let graph = config.get_graph(mission)?;
-    let packs = collect_output_packs(graph, &config.plan_policy())?;
+    let packs = collect_output_packs(graph, config.plan_policy(), &config.plan_profile())?;
 
     // The copperlist message vector flattens the packs in slot order.
     let mut ranges = Vec::with_capacity(packs.len());
@@ -84,7 +85,7 @@ where
         }
     }
 
-    Ok(PlanPolicy::Profiled {
+    Ok(PlanProfile {
         task_duration_ns: finalize_samples(samples, stat),
     })
 }
@@ -112,9 +113,9 @@ fn finalize_samples(
     task_duration_ns
 }
 
-/// Writes the policy as pretty RON: the pasteable `plan_policy:` value.
-pub fn write_schedule_profile(policy: &PlanPolicy, path: &Path) -> CuResult<()> {
-    let ron = ron::ser::to_string_pretty(policy, ron::ser::PrettyConfig::default())
+/// Writes the profile as pretty RON: the pasteable `plan_profile:` value.
+pub fn write_schedule_profile(profile: &PlanProfile, path: &Path) -> CuResult<()> {
+    let ron = ron::ser::to_string_pretty(profile, ron::ser::PrettyConfig::default())
         .map_err(|e| CuError::new_with_cause("Failed to serialize schedule profile", e))?;
     std::fs::write(path, ron)
         .map_err(|e| CuError::new_with_cause("Failed to write schedule profile", e))
@@ -147,14 +148,14 @@ mod tests {
 
     #[test]
     fn profile_snippet_round_trips_through_ron() {
-        let policy = PlanPolicy::Profiled {
+        let profile = PlanProfile {
             task_duration_ns: samples(&[("cam", &[0])])
                 .into_keys()
                 .map(|task| (task, 1234u64))
                 .collect(),
         };
-        let ron = ron::ser::to_string_pretty(&policy, ron::ser::PrettyConfig::default()).unwrap();
-        let parsed: PlanPolicy = ron::from_str(&ron).unwrap();
-        assert_eq!(parsed, policy);
+        let ron = ron::ser::to_string_pretty(&profile, ron::ser::PrettyConfig::default()).unwrap();
+        let parsed: PlanProfile = ron::from_str(&ron).unwrap();
+        assert_eq!(parsed, profile);
     }
 }

@@ -148,7 +148,7 @@ pub enum Command {
         #[arg(long)]
         mission: Option<String>,
     },
-    /// Export a measured `plan_policy: Profiled(...)` RON snippet (see sched-v0.md)
+    /// Export a measured `plan_profile: (...)` RON snippet (see sched-v0.md)
     ScheduleProfile {
         /// Output RON file path
         #[arg(short, long, default_value = "schedule_profile.ron")]
@@ -488,10 +488,11 @@ where
     let cfg = read_configuration(config_path)
         .map_err(|e| CuError::new_with_cause("Failed to read configuration", e))?;
     let reader = UnifiedLoggerIOReader::new(dl, UnifiedLogType::CopperList);
-    let policy = compute_schedule_profile::<P>(reader, &cfg, mission.as_deref(), stat)?;
-    write_schedule_profile(&policy, &output)?;
+    let profile = compute_schedule_profile::<P>(reader, &cfg, mission.as_deref(), stat)?;
+    write_schedule_profile(&profile, &output)?;
     println!(
-        "Wrote {}. Paste its content as the config's `runtime.plan_policy` value and rebuild.",
+        "Wrote {}. Paste its content as the config's `runtime.plan_profile` value, set \
+         `runtime.plan_policy` to a profile-guided policy, and rebuild.",
         output.display()
     );
     Ok(())
