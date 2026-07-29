@@ -70,12 +70,11 @@ needs no re-measurement, and `parallel-rt` placement can read the same
 `PlanProfile` without going through a policy at all.
 
 Both fields are optional. `plan_policy` defaults to `TopoBfs`, whose output is
-byte-identical to the historical planner. A policy with `needs_profile()` and
-an empty `plan_profile` fails the build with a message pointing at
-`schedule-profile` — a config mistake, not a silent fallback to another order.
-
-The field is optional and defaults to `TopoBfs`; v0 output is byte-identical
-to the current planner (same order, same copperlist indices).
+byte-identical to the historical planner (same order, same copperlist indices).
+A policy with `needs_profile()` and an empty `plan_profile` fails the build with
+a message pointing at `schedule-profile` — a config mistake, not a silent
+fallback to another order. The same holds for `core_placement`: a non-default
+placement with no `rt` affinity list to place onto fails the build.
 
 **Why the RON config and not a macro attribute:** the unified log embeds the
 config. Offline tools (`cu29_export` logstats) recompute the plan from that
@@ -169,8 +168,15 @@ raw samples.
 ## Caveats
 
 - A different order changes the copperlist slot layout, hence the generated
-  types. Logs recorded under one plan do not resim under another. The policy
-  is part of the embedded config, so a mismatch is detectable.
+  types. Logs recorded under one plan do not resim under another. The unified
+  log embeds the config the binary ran, so `log-stats` and `schedule-profile`
+  compare it against the `--config` file they plan with and warn when the two
+  disagree. Without that check, editing the config before re-exporting would
+  silently misattribute every step.
+- `logstats` plans over the config graph, while the runtime plans over the graph
+  the derive expands with one node per bridge channel. On a config with bridges
+  the `pipeline` step indices therefore do not line up with the `parallel-rt`
+  worker indices. Naming stays correct; only the numbering shifts.
 - A profile change requires a rebuild. Inherent to compile-time planning; the
   determinism and zero-alloc properties of the generated loop depend on it.
 

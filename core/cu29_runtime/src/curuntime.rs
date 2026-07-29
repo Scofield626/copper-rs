@@ -2019,7 +2019,7 @@ fn critical_path_first_order(graph: &CuGraph, profile: &PlanProfile) -> CuResult
 /// This is the main entry point to compute an execution plan at compilation
 /// time. The policy picks the step order, reading `profile` when it is a
 /// profile-guided one; the build phase is shared by every policy (see
-/// `sched-v0.md`).
+/// `doc/sched-v0.md`).
 pub fn compute_runtime_plan(
     graph: &CuGraph,
     policy: PlanPolicy,
@@ -2071,9 +2071,10 @@ pub fn compute_runtime_plan(
 
 /// Assigns every plan step to a slot of the `rt` pool's CPU affinity list.
 ///
-/// Returns one slot index per step, in plan order, each in `0..slots`. The
-/// caller hands that slot to `apply_current_thread_scheduling` in place of the
-/// step index, so the historical `index % slots` spread stays reachable.
+/// Returns exactly `plan.steps.len()` slot indices, in plan order, each in
+/// `0..slots` — one per stage worker, whatever the placement. The caller hands
+/// that slot to `apply_current_thread_scheduling` in place of the step index,
+/// so the historical `index % slots` spread stays reachable.
 ///
 /// [`CorePlacement::LongestFirst`] is longest-processing-time-first bin
 /// packing: walk the steps heaviest first and give each to the slot with the
@@ -2109,16 +2110,18 @@ pub fn place_steps_on_cores(
         return Ok((0..step_count).map(|step| step % slots).collect());
     }
 
-    let mut durations = Vec::with_capacity(step_count);
-    collect_step_durations(plan, profile, &mut durations);
+    // Always one weight per plan step, so every placement returns the same
+    // number of slots as the pipeline spawns stage workers.
+    let durations = step_weights(plan, profile);
+    debug_assert_eq!(durations.len(), step_count);
 
     // Heaviest first; equal weights keep plan order so the packing is stable.
-    let mut by_weight: Vec<usize> = (0..durations.len()).collect();
+    let mut by_weight: Vec<usize> = (0..step_count).collect();
     by_weight.sort_by_key(|&step| (core::cmp::Reverse(durations[step]), step));
 
     let mut load = vec![0u128; slots];
     let mut assigned = vec![0usize; slots];
-    let mut placement_of_step = vec![0usize; durations.len()];
+    let mut placement_of_step = vec![0usize; step_count];
     for step in by_weight {
         let slot = (0..slots)
             .min_by_key(|&slot| (load[slot], assigned[slot], slot))
@@ -2131,17 +2134,26 @@ pub fn place_steps_on_cores(
     Ok(placement_of_step)
 }
 
-/// Flattens the plan's measured step durations in execution order, descending
-/// into nested loops so a step's position matches its worker index.
-fn collect_step_durations(plan: &CuExecutionLoop, profile: &PlanProfile, out: &mut Vec<u64>) {
-    for unit in &plan.steps {
+/// One measured weight per top-level plan unit, in execution order.
+///
+/// The generated pipeline spawns one stage worker per top-level unit, so the
+/// result is always `plan.steps.len()` long: a unit's position is its worker
+/// index. A nested loop counts as the sum of the steps it runs.
+fn step_weights(plan: &CuExecutionLoop, profile: &PlanProfile) -> Vec<u64> {
+    fn weight(unit: &CuExecutionUnit, profile: &PlanProfile) -> u64 {
         match unit {
-            CuExecutionUnit::Step(step) => {
-                out.push(profile.task_duration_ns(step.node.get_id().as_str()))
-            }
-            CuExecutionUnit::Loop(inner) => collect_step_durations(inner, profile, out),
+            CuExecutionUnit::Step(step) => profile.task_duration_ns(step.node.get_id().as_str()),
+            CuExecutionUnit::Loop(inner) => inner
+                .steps
+                .iter()
+                .map(|inner_unit| weight(inner_unit, profile))
+                .sum(),
         }
     }
+    plan.steps
+        .iter()
+        .map(|unit| weight(unit, profile))
+        .collect()
 }
 
 //tests

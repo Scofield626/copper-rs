@@ -148,7 +148,7 @@ pub enum Command {
         #[arg(long)]
         mission: Option<String>,
     },
-    /// Export a measured `plan_profile: (...)` RON snippet (see sched-v0.md)
+    /// Export a measured `plan_profile: (...)` RON snippet (see doc/sched-v0.md)
     ScheduleProfile {
         /// Output RON file path
         #[arg(short, long, default_value = "schedule_profile.ron")]
@@ -248,7 +248,8 @@ where
 {
     let args = LogReaderCli::parse();
     let unifiedlog_base = args.unifiedlog_base;
-    let _ = cu29::logcodec::seed_effective_config_from_log::<P>(&unifiedlog_base)?;
+    let embedded_config_ron =
+        cu29::logcodec::seed_effective_config_from_log::<P>(&unifiedlog_base)?;
 
     let mut dl = build_read_logger(&unifiedlog_base)?;
 
@@ -313,7 +314,7 @@ where
             config,
             mission,
         } => {
-            run_logstats::<P>(dl, output, config, mission)?;
+            run_logstats::<P>(dl, output, config, mission, embedded_config_ron.as_deref())?;
         }
         Command::ScheduleProfile {
             output,
@@ -321,7 +322,14 @@ where
             mission,
             stat,
         } => {
-            run_schedule_profile::<P>(dl, output, config, mission, stat)?;
+            run_schedule_profile::<P>(
+                dl,
+                output,
+                config,
+                mission,
+                stat,
+                embedded_config_ron.as_deref(),
+            )?;
         }
         #[cfg(feature = "mcap")]
         Command::ExportMcap {
@@ -373,7 +381,8 @@ where
 {
     let args = LogReaderCli::parse();
     let unifiedlog_base = args.unifiedlog_base;
-    let _ = cu29::logcodec::seed_effective_config_from_log::<P>(&unifiedlog_base)?;
+    let embedded_config_ron =
+        cu29::logcodec::seed_effective_config_from_log::<P>(&unifiedlog_base)?;
 
     let mut dl = build_read_logger(&unifiedlog_base)?;
 
@@ -438,7 +447,7 @@ where
             config,
             mission,
         } => {
-            run_logstats::<P>(dl, output, config, mission)?;
+            run_logstats::<P>(dl, output, config, mission, embedded_config_ron.as_deref())?;
         }
         Command::ScheduleProfile {
             output,
@@ -446,7 +455,14 @@ where
             mission,
             stat,
         } => {
-            run_schedule_profile::<P>(dl, output, config, mission, stat)?;
+            run_schedule_profile::<P>(
+                dl,
+                output,
+                config,
+                mission,
+                stat,
+                embedded_config_ron.as_deref(),
+            )?;
         }
     }
 
@@ -458,6 +474,7 @@ fn run_logstats<P>(
     output: PathBuf,
     config: PathBuf,
     mission: Option<String>,
+    embedded_config_ron: Option<&str>,
 ) -> CuResult<()>
 where
     P: CopperListTuple + CuPayloadRawBytes,
@@ -467,6 +484,7 @@ where
         .ok_or_else(|| CuError::from("Config path is not valid UTF-8"))?;
     let cfg = read_configuration(config_path)
         .map_err(|e| CuError::new_with_cause("Failed to read configuration", e))?;
+    warn_on_plan_drift(&cfg, embedded_config_ron, config_path);
     let reader = UnifiedLoggerIOReader::new(dl, UnifiedLogType::CopperList);
     let stats = compute_logstats::<P>(reader, &cfg, mission.as_deref())?;
     write_logstats(&stats, &output)?;
@@ -480,6 +498,7 @@ fn run_schedule_profile<P>(
     config: PathBuf,
     mission: Option<String>,
     stat: ProfileStat,
+    embedded_config_ron: Option<&str>,
 ) -> CuResult<()>
 where
     P: CopperListTuple + CuPayloadRawBytes,
@@ -489,8 +508,16 @@ where
         .ok_or_else(|| CuError::from("Config path is not valid UTF-8"))?;
     let cfg = read_configuration(config_path)
         .map_err(|e| CuError::new_with_cause("Failed to read configuration", e))?;
+    warn_on_plan_drift(&cfg, embedded_config_ron, config_path);
     let reader = UnifiedLoggerIOReader::new(dl, UnifiedLogType::CopperList);
     let profile = compute_schedule_profile::<P>(reader, &cfg, mission.as_deref(), stat)?;
+    if profile.is_empty() {
+        eprintln!(
+            "Warning: no task in this recording had a process_time window, so the profile is \
+             empty. A profile-guided policy rejects an empty `plan_profile`; record a log with \
+             message logging enabled before exporting."
+        );
+    }
     write_schedule_profile(&profile, &output)?;
     println!(
         "Wrote {}. Paste its content as the config's `runtime.plan_profile` value, set \
@@ -498,6 +525,52 @@ where
         output.display()
     );
     Ok(())
+}
+
+/// Warns when the config on disk plans differently from the one the log was
+/// recorded with.
+///
+/// Both tools map copperlist slots back to tasks by recomputing the plan from
+/// `--config`. The unified log embeds the config the binary actually ran, so a
+/// profile pasted (or a policy switched) without a rebuild is detectable here —
+/// and it silently misattributes every slot if it goes unnoticed.
+fn warn_on_plan_drift(cfg: &CuConfig, embedded_config_ron: Option<&str>, config_path: &str) {
+    if let Some(warning) = plan_drift_warning(cfg, embedded_config_ron, config_path) {
+        eprintln!("{warning}");
+    }
+}
+
+/// The warning text of [`warn_on_plan_drift`], or `None` when the on-disk config
+/// still plans the way the recording did.
+fn plan_drift_warning(
+    cfg: &CuConfig,
+    embedded_config_ron: Option<&str>,
+    config_path: &str,
+) -> Option<String> {
+    let recorded = read_configuration_str(embedded_config_ron?.to_string(), None).ok()?;
+    let mut drift = Vec::new();
+    if recorded.plan_policy() != cfg.plan_policy() {
+        drift.push(format!(
+            "plan_policy: log has {:?}, '{config_path}' has {:?}",
+            recorded.plan_policy(),
+            cfg.plan_policy()
+        ));
+    }
+    if recorded.plan_profile() != cfg.plan_profile() {
+        drift.push(format!(
+            "plan_profile: '{config_path}' was edited since the log"
+        ));
+    }
+    if drift.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "Warning: '{config_path}' no longer plans the way the recorded binary did ({}). \
+         Steps are mapped to tasks with the on-disk plan, so the results below are \
+         misattributed. Rebuild and re-record, or export against the config the log was \
+         made with.",
+        drift.join("; ")
+    ))
 }
 
 /// Helper function for MCAP export.
@@ -1434,6 +1507,49 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use tempfile::{TempDir, tempdir};
+
+    /// A src -> sink config, optionally carrying a `runtime:` section.
+    fn plan_config(runtime: &str) -> CuConfig {
+        let txt = format!(
+            r#"(
+                tasks: [(id: "src", type: "a"), (id: "sink", type: "b")],
+                cnx: [(src: "src", dst: "sink", msg: "msg::A")],
+                {runtime}
+            )"#
+        );
+        read_configuration_str(txt, None).expect("config should parse")
+    }
+
+    #[test]
+    fn plan_drift_is_reported_against_the_config_embedded_in_the_log() {
+        let recorded = r#"(
+            tasks: [(id: "src", type: "a"), (id: "sink", type: "b")],
+            cnx: [(src: "src", dst: "sink", msg: "msg::A")],
+        )"#;
+
+        // Same plan on both sides: nothing to say.
+        let same = plan_config("");
+        assert!(plan_drift_warning(&same, Some(recorded), "copperconfig.ron").is_none());
+        // No embedded config (an older log) cannot be compared.
+        assert!(plan_drift_warning(&same, None, "copperconfig.ron").is_none());
+
+        // A policy switched without re-recording.
+        let switched = plan_config(
+            "runtime: (plan_policy: CriticalPathFirst, plan_profile: (task_duration_ns: {\"src\": 5})),",
+        );
+        let warning = plan_drift_warning(&switched, Some(recorded), "copperconfig.ron")
+            .expect("a switched policy must be reported");
+        assert!(warning.contains("plan_policy"), "{warning}");
+        assert!(warning.contains("plan_profile"), "{warning}");
+
+        // A profile pasted but the policy left alone still changes nothing about
+        // the plan, yet it means the file no longer matches the recording.
+        let pasted = plan_config("runtime: (plan_profile: (task_duration_ns: {\"src\": 5})),");
+        let warning = plan_drift_warning(&pasted, Some(recorded), "copperconfig.ron")
+            .expect("an edited profile must be reported");
+        assert!(warning.contains("plan_profile"), "{warning}");
+        assert!(!warning.contains("plan_policy"), "{warning}");
+    }
 
     fn copy_stringindex_to_temp(tmpdir: &TempDir) -> PathBuf {
         // Build a minimal index on the fly so tests don't depend on build-time artifacts.

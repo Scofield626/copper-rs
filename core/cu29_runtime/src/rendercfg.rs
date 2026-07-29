@@ -1,7 +1,8 @@
 mod config;
 use clap::Parser;
 use config::{
-    ConfigGraphs, PortLookup, build_render_topology, read_configuration, read_multi_configuration,
+    ConfigGraphs, LOGSTATS_SCHEMA_VERSION, PortLookup, build_render_topology, read_configuration,
+    read_multi_configuration,
 };
 pub use cu29_traits::*;
 use hashbrown::HashMap;
@@ -46,7 +47,6 @@ const MODULE_TRUNC_MARKER: &str = "…";
 const MODULE_SEPARATOR: &str = "⠶";
 const PLACEHOLDER_TEXT: &str = "\u{2014}";
 const COPPER_LOGO_SVG: &str = include_str!("../assets/cu29.svg");
-const LOGSTATS_SCHEMA_VERSION: u32 = 1;
 
 // Color palette and fills.
 const BORDER_COLOR: &str = "#999999";

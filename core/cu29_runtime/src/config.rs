@@ -642,6 +642,14 @@ pub const DEFAULT_BACKGROUND_POOL: &str = "background";
 #[allow(dead_code)] // consumed by cu29_derive; unused in some binary targets
 pub const RT_POOL: &str = "rt";
 
+/// Schema version of the `log-stats` JSON document. Lives here because both the
+/// writer (`cu29_export::logstats`) and the reader (the `cu29-rendercfg` bin)
+/// must agree on it; keeping one copy per crate let them drift.
+///
+/// 1: edges + perf. 2: adds the `pipeline` section.
+#[allow(dead_code)] // consumed by cu29_export; unused in some binary targets
+pub const LOGSTATS_SCHEMA_VERSION: u32 = 2;
+
 /// How a task is backgrounded.
 ///
 /// Either a simple on/off flag (`background: true`), which runs the task on the
@@ -1994,7 +2002,7 @@ pub struct LoggingCodecSpec {
 /// Every variant names an algorithm and nothing else; measured data lives in
 /// [`PlanProfile`], next to this field. Every variant emits a valid
 /// topological order of the task graph, so a policy can only pick a better or
-/// worse order, never a wrong one. See `sched-v0.md` for the roadmap.
+/// worse order, never a wrong one. See `doc/sched-v0.md` for the roadmap.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PlanPolicy {
     /// The historical heuristic: BFS from the sources, a node entering the
@@ -2100,7 +2108,7 @@ pub struct RuntimeConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub thread_pools: Vec<ThreadPoolConfig>,
 
-    /// Ordering algorithm for the compile-time execution plan (see `sched-v0.md`).
+    /// Ordering algorithm for the compile-time execution plan (see `doc/sched-v0.md`).
     #[serde(default, skip_serializing_if = "PlanPolicy::is_default")]
     pub plan_policy: PlanPolicy,
 
@@ -2111,7 +2119,7 @@ pub struct RuntimeConfig {
     pub plan_profile: PlanProfile,
 
     /// How `parallel-rt` stage workers map onto the `rt` pool's CPU affinity
-    /// list (see `sched-v0.md`).
+    /// list (see `doc/sched-v0.md`).
     #[serde(default, skip_serializing_if = "CorePlacement::is_default")]
     pub core_placement: CorePlacement,
 }

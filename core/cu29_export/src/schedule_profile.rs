@@ -4,7 +4,7 @@
 //! metadata already carries; no extra instrumentation is involved. The output
 //! RON is the exact value of the config's `runtime.plan_profile` field, which
 //! any profile-guided [`PlanPolicy`](cu29::config::PlanPolicy) then reads
-//! (see `sched-v0.md`).
+//! (see `doc/sched-v0.md`).
 
 use crate::copperlists_reader;
 use crate::logstats::{build_pack_ranges, collect_output_packs, sample_step_duration_ns};
@@ -73,7 +73,13 @@ fn finalize_samples(
                 (durations.iter().map(|&d| d as u128).sum::<u128>() / durations.len() as u128)
                     as u64
             }
-            ProfileStat::P99 => durations[(durations.len() - 1) * 99 / 100],
+            // Nearest rank: the smallest sample at or above 99% of the set.
+            // `(len - 1) * 99 / 100` rounds the other way and returns the
+            // minimum for two samples, which is never a p99.
+            ProfileStat::P99 => {
+                let rank = (durations.len() as u128 * 99).div_ceil(100).max(1) as usize;
+                durations[rank - 1]
+            }
             ProfileStat::Max => *durations.last().unwrap(),
         };
         task_duration_ns.insert(task, value);
@@ -110,8 +116,21 @@ mod tests {
         let max = finalize_samples(input.clone(), ProfileStat::Max);
         assert_eq!(max.get("cam"), Some(&300));
 
+        // Nearest rank over 3 samples lands on the largest one.
         let p99 = finalize_samples(input, ProfileStat::P99);
-        assert_eq!(p99.get("cam"), Some(&200));
+        assert_eq!(p99.get("cam"), Some(&300));
+        assert_eq!(p99.get("imu"), Some(&10));
+    }
+
+    #[test]
+    fn p99_never_returns_the_minimum() {
+        // Nearest rank on tiny sets: a p99 must stay pessimistic.
+        let two = finalize_samples(samples(&[("cam", &[10, 900])]), ProfileStat::P99);
+        assert_eq!(two.get("cam"), Some(&900));
+
+        let hundred: Vec<u64> = (1..=100).collect();
+        let wide = finalize_samples(samples(&[("cam", &hundred)]), ProfileStat::P99);
+        assert_eq!(wide.get("cam"), Some(&99));
     }
 
     #[test]

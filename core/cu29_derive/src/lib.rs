@@ -16,9 +16,9 @@ use crate::utils::{config_id_to_bridge_const, config_id_to_enum, config_id_to_st
 use cu29_build::COPPER_CFG_FEATURES_ENV;
 use cu29_runtime::config::CuConfig;
 use cu29_runtime::config::{
-    BridgeChannelConfigRepresentation, ConfigGraphs, CuGraph, Flavor, HandleContent, Node, NodeId,
-    PlanPolicy, PlanProfile, RT_POOL, ResourceBundleConfig, read_configuration_with_features,
-    read_configuration_with_resolved_ron_and_features,
+    BridgeChannelConfigRepresentation, ConfigGraphs, CorePlacement, CuGraph, Flavor, HandleContent,
+    Node, NodeId, PlanPolicy, PlanProfile, RT_POOL, ResourceBundleConfig,
+    read_configuration_with_features, read_configuration_with_resolved_ron_and_features,
 };
 use cu29_runtime::curuntime::{
     CuExecutionLoop, CuExecutionStep, CuExecutionUnit, CuTaskType, compute_runtime_plan,
@@ -4137,7 +4137,7 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                             .runtime_config
                             .thread_pools
                             .iter()
-                            .find(|pool| pool.id == RT_POOL)
+                            .find(|pool| pool.id == cu29::config::RT_POOL)
                             .cloned(),
                     );
                     #(#parallel_stage_worker_spawns)*
@@ -8026,30 +8026,52 @@ fn build_monitor_culist_component_mapping(
 /// step, or `None` when there is nothing to place: no `rt` pool, or an `rt`
 /// pool that declares no CPU affinity. `None` leaves the historical
 /// spread-by-stage-index behavior untouched.
+///
+/// A non-default placement with nothing to place is a config mistake, not a
+/// silent fallback: it errors out the same way an empty profile does.
 fn build_stage_affinity_slots(
     config: &CuConfig,
     plan: &CuExecutionLoop,
 ) -> CuResult<Option<Vec<usize>>> {
-    let Some(runtime) = config.runtime.as_ref() else {
-        return Ok(None);
-    };
-    let Some(rt_pool) = runtime.thread_pools.iter().find(|pool| pool.id == RT_POOL) else {
-        return Ok(None);
-    };
-    let Some(cores) = rt_pool.affinity.as_ref().filter(|cores| !cores.is_empty()) else {
-        return Ok(None);
+    let placement = config.core_placement();
+    let no_slots = |reason: String| -> CuResult<Option<Vec<usize>>> {
+        if placement == CorePlacement::default() {
+            return Ok(None);
+        }
+        Err(CuError::from(format!(
+            "The core placement {placement:?} has no CPU affinity slots to place onto: {reason}. \
+             Declare the cores in the '{RT_POOL}' thread pool, for example \
+             `runtime: (thread_pools: [(id: \"{RT_POOL}\", threads: 4, affinity: [0, 1, 2, 3])])`, \
+             or drop `core_placement` to keep the default {:?}.",
+            CorePlacement::default()
+        )))
     };
 
-    let slots = place_steps_on_cores(
-        plan,
-        config.core_placement(),
-        &config.plan_profile(),
-        cores.len(),
-    )?;
+    let Some(runtime) = config.runtime.as_ref() else {
+        return no_slots("the config has no `runtime` section".to_string());
+    };
+    let Some(rt_pool) = runtime.thread_pools.iter().find(|pool| pool.id == RT_POOL) else {
+        return no_slots(format!("the config declares no '{RT_POOL}' thread pool"));
+    };
+    let Some(cores) = rt_pool.affinity.as_ref().filter(|cores| !cores.is_empty()) else {
+        return no_slots(format!(
+            "the '{RT_POOL}' thread pool declares an empty CPU affinity list"
+        ));
+    };
+
+    let slots = place_steps_on_cores(plan, placement, &config.plan_profile(), cores.len())?;
+    // The generated pipeline spawns exactly one stage worker per plan step, so a
+    // shorter slot list would silently leave the tail on its stage index.
+    if slots.len() != plan.steps.len() {
+        return Err(CuError::from(format!(
+            "Core placement produced {} slots for {} plan steps",
+            slots.len(),
+            plan.steps.len()
+        )));
+    }
     #[cfg(feature = "macro_debug")]
     eprintln!(
-        "[core placement: {:?} over {} slots -> {slots:?}]",
-        config.core_placement(),
+        "[core placement: {placement:?} over {} slots -> {slots:?}]",
         cores.len()
     );
     Ok(Some(slots))
@@ -9748,15 +9770,16 @@ mod tests {
     }
 
     #[test]
-    fn core_placement_is_skipped_without_an_affinity_list() {
+    fn default_core_placement_is_skipped_without_an_affinity_list() {
         use super::*;
-        use cu29::config::CuConfig;
+        use cu29::config::{CorePlacement, CuConfig};
 
         let mut config: CuConfig =
             read_config("tests/config/core_placement_valid.ron").expect("failed to read config");
         let graph = config.get_graph(None).expect("missing graph");
         let plan = compute_runtime_plan(graph, config.plan_policy(), &config.plan_profile())
             .expect("runtime plan failed");
+        config.runtime.as_mut().unwrap().core_placement = CorePlacement::Spread;
 
         // An rt pool that pins nothing has no slots to balance across.
         config.runtime.as_mut().unwrap().thread_pools[0].affinity = None;
@@ -9773,6 +9796,49 @@ mod tests {
                 .expect("placement failed")
                 .is_none()
         );
+
+        // ... nor one without a runtime section.
+        config.runtime = None;
+        assert!(
+            build_stage_affinity_slots(&config, &plan)
+                .expect("placement failed")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn requested_core_placement_without_slots_fails_the_build() {
+        use super::*;
+        use cu29::config::CuConfig;
+
+        let mut config: CuConfig =
+            read_config("tests/config/core_placement_valid.ron").expect("failed to read config");
+        let graph = config.get_graph(None).expect("missing graph");
+        let plan = compute_runtime_plan(graph, config.plan_policy(), &config.plan_profile())
+            .expect("runtime plan failed");
+
+        // `core_placement: LongestFirst` with nothing to place onto is a config
+        // mistake, not a silent fallback to the historical spread. Dropping the
+        // whole `runtime` section drops the request with it, so it is not in
+        // this list.
+        for strip in [
+            (|config: &mut CuConfig| {
+                config.runtime.as_mut().unwrap().thread_pools[0].affinity = None
+            }) as fn(&mut CuConfig),
+            |config: &mut CuConfig| {
+                config.runtime.as_mut().unwrap().thread_pools[0].affinity = Some(Vec::new())
+            },
+            |config: &mut CuConfig| config.runtime.as_mut().unwrap().thread_pools.clear(),
+        ] {
+            let mut config = config.clone();
+            strip(&mut config);
+            let err = build_stage_affinity_slots(&config, &plan)
+                .expect_err("a requested placement with no slots must fail");
+            assert!(
+                err.to_string().contains("LongestFirst"),
+                "unexpected error: {err}"
+            );
+        }
     }
 
     #[test]

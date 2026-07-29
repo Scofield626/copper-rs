@@ -1,6 +1,6 @@
 use crate::copperlists_reader;
 use cu29::clock::{CuDuration, OptionCuTime};
-use cu29::config::{CuConfig, CuGraph, Flavor, PlanPolicy, PlanProfile};
+use cu29::config::{CuConfig, CuGraph, Flavor, LOGSTATS_SCHEMA_VERSION, PlanPolicy, PlanProfile};
 use cu29::curuntime::{CuExecutionLoop, CuExecutionUnit, compute_runtime_plan};
 use cu29::monitoring::CuDurationStatistics;
 use cu29::prelude::{CopperListTuple, CuMsgMetadataTrait, CuPayloadRawBytes};
@@ -11,7 +11,6 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-const LOGSTATS_SCHEMA_VERSION: u32 = 2;
 const MAX_LATENCY_NS: u64 = 10_000_000_000;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -21,6 +20,8 @@ pub struct LogStats {
     pub mission: Option<String>,
     pub edges: Vec<EdgeLogStats>,
     pub perf: PerfStats,
+    /// Added in schema version 2, so a version 1 document still reads back.
+    #[serde(default)]
     pub pipeline: PipelineStats,
 }
 
@@ -49,7 +50,12 @@ pub struct PipelineStats {
 pub struct StageStats {
     /// Task or bridge id owning this plan step.
     pub task: String,
-    /// Plan step index, which is also the `parallel-rt` worker index.
+    /// Index of this step in the plan computed from the config graph, which is
+    /// also its copperlist output slot.
+    ///
+    /// This matches the `parallel-rt` worker index only for a graph without
+    /// bridges: the runtime plans over a graph the derive first expands with one
+    /// node per bridge channel, and those extra steps shift every later index.
     pub index: usize,
     pub samples: u64,
     /// Measured `process()` window of this step: min/max/mean/stddev, all
@@ -432,7 +438,12 @@ where
 /// without opening the file.
 pub fn format_bottleneck(pipeline: &PipelineStats) -> String {
     let Some(slowest) = &pipeline.bottleneck else {
-        return "Bottleneck: unknown (no step had a recorded process_time window).".to_string();
+        let reason = if pipeline.stages.iter().any(|stage| stage.samples > 0) {
+            "every sampled step measured 0 ns"
+        } else {
+            "no step had a recorded process_time window"
+        };
+        return format!("Bottleneck: unknown ({reason}).");
     };
     let speedup = match pipeline.max_pipeline_speedup {
         Some(speedup) => format!("{speedup:.2}x"),
