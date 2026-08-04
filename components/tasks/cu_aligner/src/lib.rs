@@ -79,11 +79,16 @@ macro_rules! define_task {
                 input: &Self::Input<'_>,
                 output: &mut Self::Output<'_>,
             ) -> CuResult<()> {
-                // add the incoming data into the buffers
-                // input is a tuple of &CuMsg<T> for each T in the input
+                // Add the incoming data into the buffers.
+                // input is a tuple of &CuMsg<T> for each T in the input.
+                // A tick where the upstream task had nothing to emit carries a tov
+                // but no payload. It holds no data to align, so it must not take a
+                // slot in the fixed-size buffer nor advance the alignment window.
                 paste::paste! {
                     $(
-                        self.aligner.[<buffer $index>].push(input.$index.clone());
+                        if input.$index.payload().is_some() {
+                            self.aligner.[<buffer $index>].push(input.$index.clone());
+                        }
                     )*
                 }
 
@@ -93,10 +98,12 @@ macro_rules! define_task {
                     return Ok(());
                 };
 
-                // Populate the CuArray fields in the output message
+                // Populate the CuArray fields in the output message.
+                // `TimeboundCircularBuffer::push` is public, so skip payload-less
+                // messages here too rather than unwrapping them.
                 let output_payload = output.payload_mut().get_or_insert_with(Default::default);
                 $(
-                    output_payload.$index.fill_from_iter(tuple_of_iters.$index.map(|msg| msg.payload().unwrap().clone()));
+                    output_payload.$index.fill_from_iter(tuple_of_iters.$index.filter_map(|msg| msg.payload().cloned()));
                 )*
                 Ok(())
             }
@@ -125,6 +132,56 @@ mod tests {
         let result = aligner.process(&ctx, &input, &mut output);
         assert!(result.is_ok());
     }
+    /// A task that had nothing to emit still ticks, so a message can carry a tov
+    /// with no payload. Such a message used to reach `payload().unwrap()` and abort
+    /// the process.
+    #[test]
+    fn test_aligner_tolerates_payload_less_ticks() {
+        let mut config = ComponentConfig::default();
+        config.set("target_alignment_window_ms", 100);
+        config.set("stale_data_horizon_ms", 1000);
+        let mut aligner = AlignerTask::new(Some(&config), ()).unwrap();
+        let ctx = CuContext::new_with_clock();
+
+        let tov = Tov::Time(CuTime::from_millis(100));
+        let mut empty = CuStampedData::<f32, CuMsgMetadata>::new(None);
+        empty.tov = tov;
+        let mut present = CuStampedData::<i32, CuMsgMetadata>::new(Some(7));
+        present.tov = tov;
+
+        let mut output =
+            CuStampedData::<(CuArray<f32, 5>, CuArray<i32, 10>), CuMsgMetadata>::default();
+        aligner
+            .process(&ctx, &(&empty, &present), &mut output)
+            .unwrap();
+
+        // The payload-less tick contributes nothing and takes no buffer slot, so
+        // that stream's array comes back empty. An empty array is already a normal
+        // outcome here: `iter_window` selects on time, so a stream whose data all
+        // falls outside the window yields nothing even when every message it sent
+        // carried a payload. Consumers have to handle that either way.
+        let payload = output.payload().unwrap();
+        assert_eq!(payload.0.len(), 0);
+        assert_eq!(payload.1.as_slice(), &[7]);
+
+        // Once real data arrives on that stream, both align as usual.
+        let tov = Tov::Time(CuTime::from_millis(150));
+        let mut left = CuStampedData::<f32, CuMsgMetadata>::new(Some(1.5));
+        left.tov = tov;
+        let mut right = CuStampedData::<i32, CuMsgMetadata>::new(Some(9));
+        right.tov = tov;
+
+        let mut output =
+            CuStampedData::<(CuArray<f32, 5>, CuArray<i32, 10>), CuMsgMetadata>::default();
+        aligner
+            .process(&ctx, &(&left, &right), &mut output)
+            .unwrap();
+
+        let payload = output.payload().unwrap();
+        assert_eq!(payload.0.as_slice(), &[1.5]);
+        assert_eq!(payload.1.as_slice(), &[7, 9]);
+    }
+
     mod string_payload {
         use super::*;
 
