@@ -1,0 +1,82 @@
+[package]
+name = "copper-components-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[features]
+# Drop the byte limit on the bincode configs used by `aligner_buffer` and
+# `apriltag_codec`. That reproduces the two unbounded-allocation findings; with
+# the limit on (the default) they no longer mask other bugs.
+unbounded_decode = []
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+paste = "1.0.15"
+bincode = { package = "cu-bincode", version = "2.0", features = ["serde"] }
+
+cu29 = { path = "../core/cu29" }
+cu29-clock = { path = "../core/cu29_clock" }
+cu-ahrs = { path = "../components/tasks/cu_ahrs" }
+cu-aligner = { path = "../components/tasks/cu_aligner" }
+cu-apriltag = { path = "../components/tasks/cu_apriltag" }
+cu-sensor-payloads = { path = "../components/payloads/cu_sensor_payloads" }
+
+[[bin]]
+name = "ahrs_process"
+path = "fuzz_targets/ahrs_process.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ahrs_freeze_thaw"
+path = "fuzz_targets/ahrs_freeze_thaw.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "aligner_buffer"
+path = "fuzz_targets/aligner_buffer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "aligner_task"
+path = "fuzz_targets/aligner_task.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "apriltag_codec"
+path = "fuzz_targets/apriltag_codec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "apriltag_process"
+path = "fuzz_targets/apriltag_process.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "apriltag_image_decode"
+path = "fuzz_targets/apriltag_image_decode.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = true

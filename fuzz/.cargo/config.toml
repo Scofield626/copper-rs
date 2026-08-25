@@ -1,0 +1,3 @@
+[env]
+CFLAGS = "-std=gnu17 -w"
+CXXFLAGS = "-std=gnu++17 -w"
