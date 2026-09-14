@@ -301,10 +301,11 @@ pub struct CuChainProfile {
 pub struct CuSourceProfile {
     pub period_ms: u32,
     pub fired: u64,
-    /// Intervals of the period the window holds.
+    /// Intervals of the period over the source's firing span (at least the
+    /// run's window less one period).
     pub expected: f64,
     /// `(fired - 1) / expected`: the intervals between firings over the
-    /// intervals the period allows.
+    /// intervals the period allows; 1 for a source firing on its period.
     pub delivered_rate: f64,
 }
 

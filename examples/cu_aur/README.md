@@ -14,10 +14,13 @@ citation and the shape of the two data files.
 - **One task per callback.** `gen_config.py` writes `copperconfig.ron` from
   `data/graph.json`: 86 tasks, 83 connections, task ids equal to callback ids. The
   message is one small payload, `AurMsg { seq, root_ns }`.
-- **Roots** (`tasks::AurRoot`, 11 of them) are `CuSrcTask`s with a clock-based pacer.
-  The application runs on a 200Hz CopperList grid; a root fires on the first CopperList
-  at or after its `period_ms` deadline, stamps the CopperList's time of validity, and
-  publishes its firing count as `seq`. On the other CopperLists it clears its output.
+- **Roots** (`tasks::AurRoot`, 11 of them) are `CuSrcTask`s paced by the CopperList
+  grid. The application runs at 200Hz, so one CopperList is 5ms, and a root fires on the
+  first CopperList of each `period_ms` window: `(cl_id * 5) % period_ms < 5`. It stamps
+  the CopperList's time of validity and publishes its firing count as `seq`; on the
+  other CopperLists it clears its output. A period that is not a multiple of the grid
+  alternates window lengths — 33ms gives 7 and 6 CopperList gaps — and does it the same
+  way in every run.
 - **Callbacks** (`tasks::AurCallback`, `tasks::AurJoin`) are `kind: stateless_task`:
   `process` takes `&self`, so the planner may run different CopperLists' invocations on
   different workers with nothing ordering them. A callback runs when its input carries a
@@ -36,6 +39,11 @@ citation and the shape of the two data files.
   sink's process end minus the root's time of validity, for every CopperList in which
   the sink ran.
 
+Roots fire on the CopperList grid, so a run's content is a function of its CopperList
+ids: nothing branches on the clock and nothing is random. A serial run and a multicore
+run of the same graph therefore process identical inputs and record identical payloads,
+and only their timing differs. `root_ns` rides in the payload as timing data.
+
 The dataset's three `latest_read` edges (the side and top LiDAR concatenate sinks into
 perception's root, prediction's sink into planning's root, planning's validator into
 control's root) were a stamp-only mechanism of the region-based design they were
@@ -48,20 +56,27 @@ host-specific, so the workload has to be measured before it can be replayed:
 
 ```bash
 just calibrate        # writes calibration.ron
-just replay-check     # every callback within 5% of its targets, or 500ns
+just replay-check     # every callback within 5% of its targets, or 1µs
 ```
 
 `calibrate` fits one cost per crunch unit over five unit counts spanning the replayed
 range and refuses to write a fit any point misses by more than 5%. `replay-check` runs
 the graph and compares each callback's recorded `process_time` against the samples it
-was handed.
+was handed. The absolute allowance covers the callbacks of a few microseconds, where
+Copper's own per-step bookkeeping is a sizeable part of what `process_time` measures.
 
 ## Scale
 
 `--alpha` scales every recorded execution time. `data/graph.json` carries the factors
-that put the total median utilization at a given number of cores; the default,
-`0.457811`, is the 2.2-core point, which does not fit on one core and is the reason the
-graph is worth scheduling. `just run 5 0.1` records a serial-feasible run.
+that put the total median utilization at a given number of cores; the binary's default,
+`0.457811`, is the 2.2-core point.
+
+A sub-DAG's whole chain runs inside one CopperList, so a serial run holds every root's
+period only while the worst coincidence of the 11 sub-DAGs still fits inside the
+shortest of them. The sub-DAGs sum to 422ms of median work and the shortest period is
+20ms, which is why the recipes below record at `0.04`: `just run 5 0.457811` is the
+2.2-core point, and its roots then deliver at a fraction of their rate under the serial
+executor.
 
 ## Workflow
 
@@ -80,6 +95,15 @@ runtime macro reads its config at compile time, so running a candidate is a rebu
 the `pgo-plan` feature points the application and the logreader at
 `copperconfig-pgo.ron`, and `parallel-rt` provides the lane executor a multicore plan
 needs.
+
+## Tests
+
+```bash
+cargo test -p cu-aur --release
+```
+
+`--release` matters: the replay-accuracy bar is a property of the optimized build, and a
+debug run checks only that every callback fired once per firing of its root.
 
 ## Binaries
 

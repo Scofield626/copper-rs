@@ -22,6 +22,13 @@ struct OperationSamples {
     skipped: Vec<u64>,
 }
 
+/// A contract source's firings and the span from its first to its last.
+#[derive(Default)]
+struct SourceFirings {
+    fired: u64,
+    span: Option<(u64, u64)>,
+}
+
 /// The process interval of one origin in one CopperList, and whether any of
 /// its output slots carried a payload.
 struct OriginInterval {
@@ -106,10 +113,11 @@ where
         .map(|key| (key.clone(), OperationSamples::default()))
         .collect();
     let mut chain_samples: Vec<Vec<u64>> = vec![Vec::new(); contract.chains.len()];
-    let mut source_fired: BTreeMap<&str, u64> = contract
+    // Per contract source: firings, and the span from its first to its last.
+    let mut source_fired: BTreeMap<&str, SourceFirings> = contract
         .sources
         .iter()
-        .map(|source| (source.task.as_str(), 0))
+        .map(|source| (source.task.as_str(), SourceFirings::default()))
         .collect();
     let mut spans = Vec::new();
     let mut copperlists = 0u64;
@@ -146,9 +154,15 @@ where
             cl_start = Some(cl_start.map_or(interval.start_ns, |s: u64| s.min(interval.start_ns)));
             cl_end = Some(cl_end.map_or(interval.end_ns, |e: u64| e.max(interval.end_ns)));
             if interval.fired
-                && let Some(count) = source_fired.get_mut(*origin)
+                && let Some(firings) = source_fired.get_mut(*origin)
             {
-                *count += 1;
+                firings.fired += 1;
+                let at = interval.start_ns;
+                firings.span = Some(
+                    firings
+                        .span
+                        .map_or((at, at), |(first, last)| (first.min(at), last.max(at))),
+                );
             }
         }
         if let (Some(start), Some(end)) = (cl_start, cl_end) {
@@ -208,10 +222,14 @@ where
         );
     }
     for source in &contract.sources {
-        let fired = source_fired[source.task.as_str()];
-        // The window spans intervals between firings: `n` firings make
-        // `n - 1` of them, against the intervals the period allows.
-        let expected = window_ns as f64 / (f64::from(source.period_ms) * 1e6);
+        let SourceFirings { fired, span } = source_fired[source.task.as_str()];
+        // `n` firings make `n - 1` intervals. They are counted against the
+        // intervals the period allows over the source's own firing span, so a
+        // source firing exactly on its period scores 1; a source that fell
+        // silent is counted against the run's window instead.
+        let period_ns = f64::from(source.period_ms) * 1e6;
+        let span_ns = span.map_or(0, |(first, last)| last - first) as f64;
+        let expected = span_ns.max(window_ns as f64 - period_ns).max(0.0) / period_ns;
         profile.sources.insert(
             source.task.clone(),
             CuSourceProfile {

@@ -29,6 +29,11 @@ const STOP_POLL: Duration = Duration::from_millis(20);
 /// `data/graph.json`'s `alpha` table. The replay multiplies every recorded execution
 /// time by it.
 pub const DEFAULT_ALPHA: f64 = 0.457811;
+/// The scale the serial baseline is recorded at. A sub-DAG's whole chain runs inside one
+/// CopperList, so a serial run keeps every root's period only while the worst
+/// coincidence of the 11 sub-DAGs (422ms of median work) still fits inside the shortest
+/// of them (20ms).
+pub const SERIAL_ALPHA: f64 = 0.04;
 pub const CALIBRATION_FILENAME: &str = "calibration.ron";
 pub const COSTS_FILENAME: &str = "data/costs.json";
 pub const CONFIG_FILENAME: &str = "copperconfig.ron";

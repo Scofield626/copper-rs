@@ -20,8 +20,10 @@ JOIN_TYPE = "crate::tasks::AurJoin"
 SINK_TYPE = "crate::tasks::AurSink"
 MSG_TYPE = "crate::payload::AurMsg"
 
-# The CopperList grid: 200Hz is 5ms, which divides the 20/30/100/1000ms root
-# periods and paces the 33ms ones to within one grid step.
+# The CopperList grid: 200Hz is 5ms. A root fires on the first CopperList of each
+# period window, so 5ms must divide as many root periods as possible; it divides
+# 20/30/100/1000ms exactly and splits the 33ms ones into 7- and 6-CopperList windows.
+# tasks::GRID_MS carries the same number.
 RATE_TARGET_HZ = 200
 CPUS = [0, 1, 2, 3]
 MAX_IN_FLIGHT = 4

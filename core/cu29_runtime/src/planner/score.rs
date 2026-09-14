@@ -59,6 +59,17 @@ impl CuScoreTable {
         predictions: &BTreeMap<String, CuPrediction>,
         measured: &BTreeMap<String, CuProfile>,
     ) -> CuResult<Self> {
+        if let Some((first, reference)) = measured.iter().next() {
+            for (candidate, profile) in measured {
+                if profile.config_signature != reference.config_signature
+                    || profile.mission != reference.mission
+                {
+                    return Err(CuError::from(format!(
+                        "Profiles of '{first}' and '{candidate}' were recorded on different graphs or missions"
+                    )));
+                }
+            }
+        }
         let mut rows = Vec::with_capacity(measured.len());
         for (candidate, profile) in measured {
             let predicted = predictions.get(candidate);

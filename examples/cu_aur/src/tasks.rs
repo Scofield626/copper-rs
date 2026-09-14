@@ -93,51 +93,19 @@ impl Replay {
     }
 }
 
-/// Period gating for the timer roots. Copper has no per-task period, so the whole
-/// multi-rate mechanism is confined here.
+/// One CopperList of the grid `runtime.rate_target_hz` sets, in milliseconds.
+pub const GRID_MS: u64 = 5;
+
+/// Period gating for the timer roots, on the CopperList grid rather than on the clock.
 ///
-/// Clock-based pacing, equivalent to an rclcpp timer. The next deadline is rescheduled
-/// as `due + period`, and resynced to `now + period` once a whole period has been
-/// missed, so a lagging loop never fires a catch-up burst. Replay is therefore only
-/// deterministic at CopperList granularity.
-#[derive(Reflect)]
-pub struct Pacer {
-    period: CuDuration,
-    due: Option<CuTime>,
-}
-
-impl Pacer {
-    pub fn new(config: Option<&ComponentConfig>, task: &str) -> CuResult<Self> {
-        Ok(Self {
-            period: CuDuration::from_millis(cfg_u64(config, task, "period_ms")?),
-            due: None,
-        })
-    }
-
-    /// True on the CopperLists where the root is due to fire.
-    pub fn fire(&mut self, now: CuTime) -> bool {
-        let Some(due) = self.due else {
-            self.due = Some(now + self.period);
-            return true;
-        };
-        if now < due {
-            return false;
-        }
-        let next = due + self.period;
-        self.due = Some(if next > now { next } else { now + self.period });
-        true
-    }
-}
-
-impl Freezable for Pacer {
-    fn freeze<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        Encode::encode(&self.due, encoder)
-    }
-
-    fn thaw<D: Decoder>(&mut self, decoder: &mut D) -> Result<(), DecodeError> {
-        self.due = Decode::decode(decoder)?;
-        Ok(())
-    }
+/// A root fires on the first CopperList of each period window, so which CopperLists
+/// carry a firing is a function of the CopperList id alone: a serial run and a multicore
+/// run of the same graph see the same inputs in the same CopperLists. Periods that are
+/// not a multiple of the grid alternate window lengths deterministically — 33ms gives
+/// 7 and 6 CopperList gaps.
+#[inline]
+pub fn fires_on(cl_id: u64, period_ms: u64) -> bool {
+    (cl_id * GRID_MS) % period_ms < GRID_MS
 }
 
 /// The runtime reuses the CopperList slots, so a suppressed output has to drop the
@@ -148,22 +116,24 @@ fn suppress(output: &mut CuMsg<AurMsg>) {
 }
 
 /// A timer root: fires its sub-DAG on its own period and stamps the firing.
+///
+/// Its firing count is its whole state; whether a CopperList carries a firing follows
+/// from that CopperList's id.
 #[derive(Reflect)]
 pub struct AurRoot {
-    pacer: Pacer,
+    period_ms: u64,
     replay: Replay,
     seq: u64,
 }
 
 impl Freezable for AurRoot {
     fn freeze<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        Encode::encode(&self.seq, encoder)?;
-        self.pacer.freeze(encoder)
+        Encode::encode(&self.seq, encoder)
     }
 
     fn thaw<D: Decoder>(&mut self, decoder: &mut D) -> Result<(), DecodeError> {
         self.seq = Decode::decode(decoder)?;
-        self.pacer.thaw(decoder)
+        Ok(())
     }
 }
 
@@ -172,19 +142,23 @@ impl CuSrcTask for AurRoot {
     type Output<'m> = output_msg!(AurMsg);
 
     fn new(config: Option<&ComponentConfig>, _resources: Self::Resources<'_>) -> CuResult<Self> {
+        let period_ms = cfg_u64(config, "AurRoot", "period_ms")?;
+        if period_ms == 0 {
+            return Err(CuError::from("AurRoot: period_ms must be positive"));
+        }
         Ok(Self {
-            pacer: Pacer::new(config, "AurRoot")?,
+            period_ms,
             replay: Replay::new(config, "AurRoot")?,
             seq: 0,
         })
     }
 
     fn process(&mut self, ctx: &CuContext, output: &mut Self::Output<'_>) -> CuResult<()> {
-        let now = ctx.now();
-        if !self.pacer.fire(now) {
+        if !fires_on(ctx.cl_id(), self.period_ms) {
             suppress(output);
             return Ok(());
         }
+        let now = ctx.now();
         self.seq += 1;
         self.replay.fire(self.seq);
         output.tov = Tov::Time(now);
@@ -300,14 +274,6 @@ impl CuSinkTask for AurSink {
 mod tests {
     use super::*;
 
-    fn config(entries: &[(&str, u64)]) -> ComponentConfig {
-        let mut config = ComponentConfig::default();
-        for (key, value) in entries {
-            config.set(key, *value);
-        }
-        config
-    }
-
     /// Cost has to be proportional to the unit count, or one `k_ns_per_unit` cannot
     /// carry a replay spanning four orders of magnitude.
     #[test]
@@ -322,23 +288,23 @@ mod tests {
         assert!((5.0..20.0).contains(&ratio), "{ratio}");
     }
 
-    #[test]
-    fn test_a_pacer_fires_on_its_first_call_then_on_its_period() {
-        let mut pacer = Pacer::new(Some(&config(&[("period_ms", 200)])), "t").unwrap();
-        let start = CuTime::from(0u64);
-        assert!(pacer.fire(start));
-        assert!(!pacer.fire(start + CuDuration::from_millis(199)));
-        assert!(pacer.fire(start + CuDuration::from_millis(200)));
+    fn firings(period_ms: u64, copperlists: u64) -> Vec<u64> {
+        (0..copperlists)
+            .filter(|cl_id| fires_on(*cl_id, period_ms))
+            .collect()
     }
 
     #[test]
-    fn test_a_lagging_pacer_resyncs_instead_of_bursting() {
-        let mut pacer = Pacer::new(Some(&config(&[("period_ms", 200)])), "t").unwrap();
-        let start = CuTime::from(0u64);
-        assert!(pacer.fire(start));
-        // A whole period late: the next deadline is one period from now, not from `due`.
-        assert!(pacer.fire(start + CuDuration::from_millis(900)));
-        assert!(!pacer.fire(start + CuDuration::from_millis(1099)));
-        assert!(pacer.fire(start + CuDuration::from_millis(1100)));
+    fn test_a_root_fires_on_the_first_copperlist_of_each_period() {
+        assert_eq!(firings(20, 20), [0, 4, 8, 12, 16]);
+        assert_eq!(firings(100, 60), [0, 20, 40]);
+        assert_eq!(firings(1000, 600), [0, 200, 400]);
+    }
+
+    /// A period that is not a multiple of the grid alternates window lengths, and does
+    /// it the same way in every run.
+    #[test]
+    fn test_a_period_off_the_grid_alternates_deterministically() {
+        assert_eq!(firings(33, 40), [0, 7, 14, 20, 27, 33]);
     }
 }

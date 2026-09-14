@@ -210,6 +210,15 @@ impl Model {
                 preds[to].push(from);
             }
         }
+        // Running an anytime task's phases together must not close a cycle
+        // through another component (a resource or state edge into a
+        // refinement and out of the base).
+        if let Some(unit) = first_unit_on_a_cycle(&preds) {
+            return Err(CuError::from(format!(
+                "Step '{}' and its refinements cannot run together: an edge leads out of one of its phases and back into an earlier one through another component",
+                inventory.steps[units[unit][0]].key
+            )));
+        }
         // A task's unit at each CopperList offset.
         let units_of = |task: &str| -> Vec<usize> {
             (0..inventory.copperlists_per_cycle)
@@ -370,16 +379,10 @@ impl Model {
                 .unwrap_or(0);
             chain_ratio.push(latency as f64 / deadline as f64);
         }
-        let source_rate: Vec<f64> = self
-            .sources
-            .iter()
-            .map(|occurrences| {
-                occurrences
-                    .iter()
-                    .map(|&o| rate[lane_of[o]])
-                    .fold(1.0f64, f64::min)
-            })
-            .collect();
+        // Admission is gated by the whole cycle: the slowest lane throttles
+        // every source, wherever the source itself runs.
+        let cycle_rate = rate.iter().copied().fold(1.0f64, f64::min);
+        let source_rate: Vec<f64> = self.sources.iter().map(|_| cycle_rate).collect();
         let rate_deficit: f64 = source_rate.iter().map(|&r| rate_deficit(r)).sum();
         let sum: f64 = chain_ratio.iter().sum();
         let max_load = load.iter().copied().fold(0.0f64, f64::max);
@@ -441,6 +444,27 @@ fn task_of_key(key: &str) -> Option<&str> {
 
 fn is_refine(key: &str) -> bool {
     key.contains("|phase:refine:")
+}
+
+/// A unit that no topological order can place, if the unit graph has a cycle.
+fn first_unit_on_a_cycle(preds: &[Vec<usize>]) -> Option<usize> {
+    let mut incoming: Vec<usize> = preds.iter().map(Vec::len).collect();
+    let mut succs: Vec<Vec<usize>> = vec![Vec::new(); preds.len()];
+    for (to, from) in preds.iter().enumerate() {
+        for &from in from {
+            succs[from].push(to);
+        }
+    }
+    let mut ready: VecDeque<usize> = (0..preds.len()).filter(|&i| incoming[i] == 0).collect();
+    while let Some(unit) = ready.pop_front() {
+        for &next in &succs[unit] {
+            incoming[next] -= 1;
+            if incoming[next] == 0 {
+                ready.push_back(next);
+            }
+        }
+    }
+    (0..preds.len()).find(|&i| incoming[i] > 0)
 }
 
 /// A source within `RATE_TOLERANCE` of its period keeps its rate.
