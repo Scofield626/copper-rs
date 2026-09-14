@@ -1,0 +1,52 @@
+import "../../justfile"
+
+# Execution-time scale of the recipes below. A sub-DAG's whole chain runs inside one
+# CopperList, so the serial baseline needs a scale where the slowest CopperList still
+# fits inside the shortest root period (20ms): the 11 sub-DAGs sum to 422ms of median
+# work, and 0.04 puts their worst coincidence at 17ms. data/graph.json's `alpha` table
+# has the heavier points; `just run 5 0.457811` is the 2.2-core one.
+ALPHA := "0.04"
+
+# Regenerate copperconfig.ron and pgo.ron from data/.
+gen:
+  python3 gen_config.py
+  fmtron --input copperconfig.ron
+  fmtron --input pgo.ron
+  rm -f copperconfig.ron.bak pgo.ron.bak
+
+# Measure this host's crunch unit into calibration.ron.
+calibrate:
+  cargo run --release -p cu-aur --bin calibrate
+
+# Record a serial run.
+run seconds="10" alpha=ALPHA:
+  cargo run --release -p cu-aur --bin cu-aur -- --seconds {{seconds}} --alpha {{alpha}}
+
+# Check that every callback replays the execution times the dataset recorded.
+replay-check seconds="5" alpha=ALPHA:
+  cargo run --release -p cu-aur --bin replay-check -- --seconds {{seconds}} --alpha {{alpha}}
+
+# Record a serial run and extract the execution profile it implies.
+profile seconds="10" alpha=ALPHA:
+  just run {{seconds}} {{alpha}}
+  mkdir -p pgo
+  cargo run --release -p cu-aur --bin cu-aur-logreader -- logs/aur.copper pgo-profile --contract pgo.ron --output pgo/profile.ron --config copperconfig.ron
+
+# Write candidate plans for the contract from that profile.
+propose candidates="3":
+  cargo run --release -p cu29-runtime --bin cu29-plan -- copperconfig.ron --propose pgo.ron --profile pgo/profile.ron --out-dir pgo/candidates --candidates {{candidates}}
+
+# Embed a candidate into copperconfig-pgo.ron, which the pgo-plan feature builds against.
+import plan="pgo/candidates/plan-1.ron":
+  cargo run --release -p cu29-runtime --bin cu29-plan -- copperconfig.ron --import-plan {{plan}} --write-config copperconfig-pgo.ron
+  fmtron --input copperconfig-pgo.ron
+  rm -f copperconfig-pgo.ron.bak
+
+# Run the imported plan on the lane executor and extract its profile.
+measure seconds="10" alpha=ALPHA:
+  cargo run --release -p cu-aur --features parallel-rt,pgo-plan --bin cu-aur -- --seconds {{seconds}} --alpha {{alpha}} --log-base logs/aur-pgo.copper
+  cargo run --release -p cu-aur --features parallel-rt,pgo-plan --bin cu-aur-logreader -- logs/aur-pgo.copper pgo-profile --contract pgo.ron --output pgo/profile-pgo.ron --config copperconfig-pgo.ron
+
+# fsck the recorded log through the standard export CLI.
+fsck log="logs/aur.copper":
+  cargo run --release -p cu-aur --bin cu-aur-logreader -- {{log}} fsck

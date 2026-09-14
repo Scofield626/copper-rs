@@ -5,9 +5,9 @@ use cu29_runtime::config::{
 };
 use cu29_runtime::curuntime::{CuExecutionStep, CuExecutionUnit, CuStepPhase, CuTaskType};
 use cu29_runtime::planner::{
-    AssembledPlan, CuContract, CuPlan, CuProfile, DEFAULT_COPPERLIST_COUNT, Fixed, PlanEntity,
-    PlanEntityKind, ProposeRequest, assemble_runtime_plan_for_mission, mission_graphs, propose,
-    step_key,
+    AssembledPlan, CuContract, CuPlan, CuPrediction, CuProfile, CuScoreTable,
+    DEFAULT_COPPERLIST_COUNT, Fixed, PlanEntity, PlanEntityKind, ProposeRequest,
+    assemble_runtime_plan_for_mission, mission_graphs, propose, step_key,
 };
 use cu29_traits::{CuError, CuResult};
 use serde::Deserialize;
@@ -96,6 +96,19 @@ struct Args {
     /// Restarts of the local search.
     #[arg(long, default_value_t = 8)]
     restarts: usize,
+    /// Rank measured candidates: the contract, then `--predictions` and the
+    /// candidates' profiles (`--measured name=profile.ron`).
+    #[arg(long, conflicts_with_all = ["list_missions", "logstats", "open", "import_plan", "validate_plan", "export_plan", "propose"])]
+    score: Option<PathBuf>,
+    /// The `predictions.ron` written by `--propose`.
+    #[arg(long, requires = "score")]
+    predictions: Option<PathBuf>,
+    /// A measured candidate, as `<name>=<profile.ron>`; repeatable.
+    #[arg(long, requires = "score")]
+    measured: Vec<String>,
+    /// Where `--score` writes its table as RON.
+    #[arg(long, default_value = "pgo/score.ron")]
+    score_output: PathBuf,
 }
 
 fn main() {
@@ -116,6 +129,9 @@ fn run(args: Args) -> CuResult<()> {
     }
     if let Some(contract_path) = &args.propose {
         return propose_candidates(&config, &args, contract_path);
+    }
+    if let Some(contract_path) = &args.score {
+        return score_candidates(&args, contract_path);
     }
     if let Some(path) = &args.import_plan {
         Fixed::new(CuPlan::read(path)?)?.apply(&mut config)?;
@@ -215,6 +231,46 @@ fn propose_candidates(config: &CuConfig, args: &Args, contract_path: &Path) -> C
             "{name}: score {:?} | tightest chain {worst}",
             prediction.score
         );
+    }
+    Ok(())
+}
+
+/// Ranks measured candidates and writes the table beside their predictions.
+fn score_candidates(args: &Args, contract_path: &Path) -> CuResult<()> {
+    let contract = CuContract::read(contract_path)?;
+    let predictions: BTreeMap<String, CuPrediction> = match &args.predictions {
+        Some(path) => {
+            let text = fs::read_to_string(path)
+                .map_err(|e| CuError::new_with_cause("Could not read predictions", e))?;
+            ron::from_str(&text)
+                .map_err(|e| CuError::new_with_cause("Could not parse predictions", e))?
+        }
+        None => BTreeMap::new(),
+    };
+    let mut measured = BTreeMap::new();
+    for entry in &args.measured {
+        let (name, path) = entry.split_once('=').ok_or_else(|| {
+            CuError::from(format!(
+                "--measured expects <name>=<profile.ron>, got '{entry}'"
+            ))
+        })?;
+        measured.insert(name.to_string(), CuProfile::read(Path::new(path))?);
+    }
+    if measured.is_empty() {
+        return Err(CuError::from(
+            "--score needs at least one --measured candidate",
+        ));
+    }
+    let table = CuScoreTable::new(&contract, &predictions, &measured)?;
+    if let Some(parent) = args.score_output.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| CuError::new_with_cause("Could not create the score directory", e))?;
+    }
+    fs::write(&args.score_output, table.serialize_ron()?)
+        .map_err(|e| CuError::new_with_cause("Could not write the score table", e))?;
+    print!("{table}");
+    if let Some(best) = table.best() {
+        println!("best measured: {}", best.candidate);
     }
     Ok(())
 }
@@ -2384,6 +2440,10 @@ mod tests {
             seed: 0,
             moves: 0,
             restarts: 0,
+            score: None,
+            predictions: None,
+            measured: Vec::new(),
+            score_output: PathBuf::from("pgo/score.ron"),
         })
         .unwrap();
         assert!(output_path.is_file());
@@ -2413,6 +2473,10 @@ mod tests {
             seed: 0,
             moves: 0,
             restarts: 0,
+            score: None,
+            predictions: None,
+            measured: Vec::new(),
+            score_output: PathBuf::from("pgo/score.ron"),
         });
         assert!(missing.is_err());
     }
@@ -2463,6 +2527,10 @@ mod tests {
             seed: 0,
             moves: 0,
             restarts: 0,
+            score: None,
+            predictions: None,
+            measured: Vec::new(),
+            score_output: PathBuf::from("pgo/score.ron"),
         })
         .unwrap();
 

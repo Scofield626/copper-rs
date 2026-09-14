@@ -1,0 +1,3645 @@
+{
+ "meta": {
+  "source": "source: atsushi421/2024_RTSS_WiP_Evaluation @ c6b9d453f313e81d9a5b89401a4435ca18ab8a99 (arXiv 2505.06780), 86 callbacks, 83 edges, 18 chains"
+ },
+ "sum_u_median": 4.364491,
+ "sum_u_median_first_samples": 4.805478,
+ "alpha": {
+  "1.5": 0.312144,
+  "2.2": 0.457811,
+  "2.25": 0.468216,
+  "2.6": 0.541049,
+  "3.0": 0.624288
+ },
+ "region_alpha": 0.69,
+ "rm_ranks": {
+  "20": 95,
+  "30": 90,
+  "33": 85,
+  "100": 70,
+  "1000": 50
+ },
+ "dm_ranks": {
+  "20": 95,
+  "30": 90,
+  "33": 85,
+  "50": 80,
+  "100": 75,
+  "300": 60,
+  "1000": 50
+ },
+ "sub_dags": [
+  {
+   "name": "control",
+   "nodes": [
+    "control_trajectory_follower_controller_node_exe_callback_1",
+    "control_autoware_shift_decider_callback_0",
+    "control_vehicle_cmd_gate_callback_16",
+    "raw_vehicle_cmd_converter_callback_2",
+    "pacmod_interface_callback_04"
+   ],
+   "root": "control_trajectory_follower_controller_node_exe_callback_1",
+   "sinks": [
+    "control_autoware_shift_decider_callback_0",
+    "pacmod_interface_callback_04"
+   ],
+   "period_ms": 30.0,
+   "sum_median_ms": 2.9207,
+   "sum_p99_ms": 9.8952,
+   "u_median": 0.097357,
+   "branches": [
+    [
+     "control_autoware_shift_decider_callback_0"
+    ],
+    [
+     "control_vehicle_cmd_gate_callback_16",
+     "raw_vehicle_cmd_converter_callback_2",
+     "pacmod_interface_callback_04"
+    ]
+   ],
+   "branch_median_ms": [
+    0.0667,
+    0.0928
+   ],
+   "designations": 1,
+   "optimal_designations": 1,
+   "branch_cycle": false
+  },
+  {
+   "name": "ekf_localizer",
+   "nodes": [
+    "localization_pose_twist_fusion_filter_ekf_localizer_callback_1",
+    "localization_pose_estimator_ndt_scan_matcher_callback_1",
+    "localization_pose_twist_fusion_filter_stop_filter_callback_0",
+    "localization_pose_twist_fusion_filter_twist2accel_callback_0"
+   ],
+   "root": "localization_pose_twist_fusion_filter_ekf_localizer_callback_1",
+   "sinks": [
+    "localization_pose_estimator_ndt_scan_matcher_callback_1",
+    "localization_pose_twist_fusion_filter_twist2accel_callback_0"
+   ],
+   "period_ms": 20.0,
+   "sum_median_ms": 1.8352,
+   "sum_p99_ms": 8.9013,
+   "u_median": 0.09176,
+   "branches": [
+    [
+     "localization_pose_estimator_ndt_scan_matcher_callback_1"
+    ],
+    [
+     "localization_pose_twist_fusion_filter_stop_filter_callback_0",
+     "localization_pose_twist_fusion_filter_twist2accel_callback_0"
+    ]
+   ],
+   "branch_median_ms": [
+    0.0989,
+    0.3381
+   ],
+   "designations": 1,
+   "optimal_designations": 1,
+   "branch_cycle": false
+  },
+  {
+   "name": "gnss",
+   "nodes": [
+    "sensing_gnss_gnss_poser_callback_1",
+    "localization_util_pose_initializer_callback_0"
+   ],
+   "root": "sensing_gnss_gnss_poser_callback_1",
+   "sinks": [
+    "localization_util_pose_initializer_callback_0"
+   ],
+   "period_ms": 1000.0,
+   "sum_median_ms": 0.5284,
+   "sum_p99_ms": 3.3687,
+   "u_median": 0.000528,
+   "branches": [
+    [
+     "localization_util_pose_initializer_callback_0"
+    ]
+   ],
+   "branch_median_ms": [
+    0.0026
+   ],
+   "designations": 1,
+   "optimal_designations": 1,
+   "branch_cycle": false
+  },
+  {
+   "name": "imu",
+   "nodes": [
+    "sensing_imu_imu_corrector_callback_0",
+    "localization_twist_estimator_gyro_odometer_callback_1",
+    "imu_localization_pose_twist_fusion_filter_ekf_localizer_callback_3",
+    "imu_localization_pose_twist_fusion_filter_twist2accel_callback_1"
+   ],
+   "root": "sensing_imu_imu_corrector_callback_0",
+   "sinks": [
+    "imu_localization_pose_twist_fusion_filter_ekf_localizer_callback_3",
+    "imu_localization_pose_twist_fusion_filter_twist2accel_callback_1"
+   ],
+   "period_ms": 33.0,
+   "sum_median_ms": 0.2841,
+   "sum_p99_ms": 0.7553,
+   "u_median": 0.008609,
+   "branches": [
+    [
+     "localization_twist_estimator_gyro_odometer_callback_1",
+     "imu_localization_pose_twist_fusion_filter_ekf_localizer_callback_3",
+     "imu_localization_pose_twist_fusion_filter_twist2accel_callback_1"
+    ]
+   ],
+   "branch_median_ms": [
+    0.1672
+   ],
+   "designations": 1,
+   "optimal_designations": 1,
+   "branch_cycle": false
+  },
+  {
+   "name": "left_lidar",
+   "nodes": [
+    "sensing_lidar_left_velodyne_driver_ros_wrapper_node_callback_0",
+    "sensing_lidar_left_crop_box_filter_self_callback_0",
+    "sensing_lidar_left_crop_box_filter_mirror_callback_0",
+    "sensing_lidar_left_distortion_corrector_node_callback_2",
+    "sensing_lidar_left_ring_outlier_filter_callback_0",
+    "sensing_lidar_concatenate_data_callback_3"
+   ],
+   "root": "sensing_lidar_left_velodyne_driver_ros_wrapper_node_callback_0",
+   "sinks": [
+    "sensing_lidar_concatenate_data_callback_3"
+   ],
+   "period_ms": 100.0,
+   "sum_median_ms": 2.2923,
+   "sum_p99_ms": 30.4345,
+   "u_median": 0.022923,
+   "branches": [
+    [
+     "sensing_lidar_left_crop_box_filter_self_callback_0",
+     "sensing_lidar_left_crop_box_filter_mirror_callback_0",
+     "sensing_lidar_left_distortion_corrector_node_callback_2",
+     "sensing_lidar_left_ring_outlier_filter_callback_0",
+     "sensing_lidar_concatenate_data_callback_3"
+    ]
+   ],
+   "branch_median_ms": [
+    1.6673
+   ],
+   "designations": 1,
+   "optimal_designations": 1,
+   "branch_cycle": false
+  },
+  {
+   "name": "perception",
+   "nodes": [
+    "sensing_lidar_concatenate_data_callback_1",
+    "perception_obstacle_segmentation_crop_box_filter_callback_0",
+    "perception_obstacle_segmentation_common_ground_filter_callback_0",
+    "perception_occupancy_grid_map_raw_pc_downsample_filter_callback_0",
+    "perception_object_recognition_detection_pointpainting_pointpainting_callback_14",
+    "localization_util_crop_box_filter_measurement_range_callback_0",
+    "perception_object_recognition_detection_roi_detected_object_fusion_callback_13",
+    "localization_util_voxel_grid_downsample_filter_callback_0",
+    "perception_occupancy_grid_map_occupancy_grid_map_node_callback_0",
+    "perception_occupancy_grid_map_obstacle_pc_downsample_filter_callback_0",
+    "perception_object_recognition_detection_obstacle_pointcloud_based_validator_node_callback_1",
+    "perception_object_recognition_detection_voxel_based_compare_map_filter_callback_1",
+    "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1",
+    "localization_util_random_downsample_filter_callback_0",
+    "localization_pose_estimator_ndt_scan_matcher_callback_2",
+    "localization_pose_twist_fusion_filter_ekf_localizer_callback_2",
+    "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2520929050865267140_callback_1",
+    "perception_object_recognition_detection_clustering_camera_lidar_fusion_detected_object_feature_remover_callback_0",
+    "perception_object_recognition_detection_clustering_shape_estimation_callback_0",
+    "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2698618723653090675_callback_0",
+    "perception_object_recognition_detection_object_lanelet_filter_callback_0",
+    "perception_object_recognition_tracking_multi_object_tracker_callback_3",
+    "perception_object_recognition_detection_clustering_camera_lidar_fusion_low_intensity_cluster_filter_node_callback_0",
+    "perception_object_recognition_detection_clustering_cluster_merger_callback_0",
+    "perception_object_recognition_detection_clustering_camera_lidar_fusion_roi_cluster_fusion_callback_13",
+    "perception_object_recognition_detection_clustering_euclidean_cluster_callback_0",
+    "perception_object_recognition_detection_clustering_low_height_crop_box_filter_callback_0",
+    "planning_scenario_planning_lane_driving_motion_planning_surround_obstacle_checker_callback_4",
+    "perception_object_recognition_tracking_decorative_tracker_merger_autoware_ecu_373458_2496151694788268076_callback_0",
+    "perception_object_recognition_prediction_map_based_prediction_callback_1",
+    "planning_scenario_planning_external_velocity_limit_selector_callback_1",
+    "perception_object_recognition_detection_clustering_roi_cluster_roi_pointcloud_fusion_callback_13",
+    "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_1",
+    "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_0"
+   ],
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "sinks": [
+    "localization_pose_twist_fusion_filter_ekf_localizer_callback_2",
+    "perception_object_recognition_prediction_map_based_prediction_callback_1",
+    "planning_scenario_planning_external_velocity_limit_selector_callback_1",
+    "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_0"
+   ],
+   "period_ms": 100.0,
+   "sum_median_ms": 229.151,
+   "sum_p99_ms": 829.6414,
+   "u_median": 2.29151,
+   "branches": [
+    [
+     "perception_obstacle_segmentation_crop_box_filter_callback_0",
+     "perception_obstacle_segmentation_common_ground_filter_callback_0",
+     "perception_occupancy_grid_map_obstacle_pc_downsample_filter_callback_0"
+    ],
+    [
+     "perception_occupancy_grid_map_raw_pc_downsample_filter_callback_0",
+     "perception_occupancy_grid_map_occupancy_grid_map_node_callback_0",
+     "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1",
+     "planning_scenario_planning_lane_driving_motion_planning_surround_obstacle_checker_callback_4",
+     "planning_scenario_planning_external_velocity_limit_selector_callback_1"
+    ],
+    [
+     "perception_object_recognition_detection_pointpainting_pointpainting_callback_14",
+     "perception_object_recognition_detection_roi_detected_object_fusion_callback_13",
+     "perception_object_recognition_detection_obstacle_pointcloud_based_validator_node_callback_1",
+     "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2520929050865267140_callback_1",
+     "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2698618723653090675_callback_0",
+     "perception_object_recognition_detection_object_lanelet_filter_callback_0",
+     "perception_object_recognition_tracking_multi_object_tracker_callback_3",
+     "perception_object_recognition_tracking_decorative_tracker_merger_autoware_ecu_373458_2496151694788268076_callback_0",
+     "perception_object_recognition_prediction_map_based_prediction_callback_1",
+     "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_0"
+    ],
+    [
+     "localization_util_crop_box_filter_measurement_range_callback_0",
+     "localization_util_voxel_grid_downsample_filter_callback_0",
+     "perception_object_recognition_detection_voxel_based_compare_map_filter_callback_1",
+     "localization_util_random_downsample_filter_callback_0",
+     "localization_pose_estimator_ndt_scan_matcher_callback_2",
+     "localization_pose_twist_fusion_filter_ekf_localizer_callback_2",
+     "perception_object_recognition_detection_clustering_low_height_crop_box_filter_callback_0",
+     "perception_object_recognition_detection_clustering_euclidean_cluster_callback_0",
+     "perception_object_recognition_detection_clustering_roi_cluster_roi_pointcloud_fusion_callback_13",
+     "perception_object_recognition_detection_clustering_cluster_merger_callback_0",
+     "perception_object_recognition_detection_clustering_camera_lidar_fusion_roi_cluster_fusion_callback_13",
+     "perception_object_recognition_detection_clustering_camera_lidar_fusion_low_intensity_cluster_filter_node_callback_0",
+     "perception_object_recognition_detection_clustering_shape_estimation_callback_0",
+     "perception_object_recognition_detection_clustering_camera_lidar_fusion_detected_object_feature_remover_callback_0",
+     "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_1"
+    ]
+   ],
+   "branch_median_ms": [
+    33.2227,
+    53.9579,
+    51.1398,
+    83.1401
+   ],
+   "designations": 256,
+   "optimal_designations": 12,
+   "branch_cycle": false
+  },
+  {
+   "name": "planning",
+   "nodes": [
+    "planning_scenario_planning_lane_driving_behavior_planning_behavior_path_planner_callback_00",
+    "planning_scenario_planning_lane_driving_behavior_planning_behavior_velocity_planner_callback_13",
+    "planning_scenario_planning_lane_driving_motion_planning_elastic_band_smoother_callback_1",
+    "planning_scenario_planning_lane_driving_motion_planning_path_optimizer_callback_1",
+    "planning_scenario_planning_lane_driving_motion_planning_motion_velocity_planner_callback_7",
+    "planning_scenario_planning_lane_driving_motion_planning_obstacle_cruise_planner_callback_3",
+    "planning_scenario_planning_scenario_selector_callback_1",
+    "planning_scenario_planning_velocity_smoother_callback_4",
+    "planning_planning_validator_callback_2"
+   ],
+   "root": "planning_scenario_planning_lane_driving_behavior_planning_behavior_path_planner_callback_00",
+   "sinks": [
+    "planning_planning_validator_callback_2"
+   ],
+   "period_ms": 100.0,
+   "sum_median_ms": 107.1053,
+   "sum_p99_ms": 338.0837,
+   "u_median": 1.071053,
+   "branches": [
+    [
+     "planning_scenario_planning_lane_driving_behavior_planning_behavior_velocity_planner_callback_13",
+     "planning_scenario_planning_lane_driving_motion_planning_elastic_band_smoother_callback_1",
+     "planning_scenario_planning_lane_driving_motion_planning_path_optimizer_callback_1",
+     "planning_scenario_planning_lane_driving_motion_planning_motion_velocity_planner_callback_7",
+     "planning_scenario_planning_lane_driving_motion_planning_obstacle_cruise_planner_callback_3",
+     "planning_scenario_planning_scenario_selector_callback_1",
+     "planning_scenario_planning_velocity_smoother_callback_4",
+     "planning_planning_validator_callback_2"
+    ]
+   ],
+   "branch_median_ms": [
+    107.0736
+   ],
+   "designations": 1,
+   "optimal_designations": 1,
+   "branch_cycle": false
+  },
+  {
+   "name": "rear_lidar",
+   "nodes": [
+    "sensing_lidar_rear_velodyne_driver_ros_wrapper_node_callback_0",
+    "sensing_lidar_rear_crop_box_filter_self_callback_0",
+    "sensing_lidar_rear_crop_box_filter_mirror_callback_0",
+    "sensing_lidar_rear_distortion_corrector_node_callback_2",
+    "sensing_lidar_rear_ring_outlier_filter_callback_0",
+    "sensing_lidar_concatenate_data_callback_5"
+   ],
+   "root": "sensing_lidar_rear_velodyne_driver_ros_wrapper_node_callback_0",
+   "sinks": [
+    "sensing_lidar_concatenate_data_callback_5"
+   ],
+   "period_ms": 100.0,
+   "sum_median_ms": 0.6209,
+   "sum_p99_ms": 21.4748,
+   "u_median": 0.006209,
+   "branches": [
+    [
+     "sensing_lidar_rear_crop_box_filter_self_callback_0",
+     "sensing_lidar_rear_crop_box_filter_mirror_callback_0",
+     "sensing_lidar_rear_distortion_corrector_node_callback_2",
+     "sensing_lidar_rear_ring_outlier_filter_callback_0",
+     "sensing_lidar_concatenate_data_callback_5"
+    ]
+   ],
+   "branch_median_ms": [
+    0.4369
+   ],
+   "designations": 1,
+   "optimal_designations": 1,
+   "branch_cycle": false
+  },
+  {
+   "name": "right_lidar",
+   "nodes": [
+    "sensing_lidar_right_velodyne_driver_ros_wrapper_node_callback_0",
+    "sensing_lidar_right_crop_box_filter_self_callback_0",
+    "sensing_lidar_right_crop_box_filter_mirror_callback_0",
+    "sensing_lidar_right_distortion_corrector_node_callback_2",
+    "sensing_lidar_right_ring_outlier_filter_callback_0",
+    "sensing_lidar_concatenate_data_callback_4"
+   ],
+   "root": "sensing_lidar_right_velodyne_driver_ros_wrapper_node_callback_0",
+   "sinks": [
+    "sensing_lidar_concatenate_data_callback_4"
+   ],
+   "period_ms": 100.0,
+   "sum_median_ms": 2.3475,
+   "sum_p99_ms": 35.7338,
+   "u_median": 0.023475,
+   "branches": [
+    [
+     "sensing_lidar_right_crop_box_filter_self_callback_0",
+     "sensing_lidar_right_crop_box_filter_mirror_callback_0",
+     "sensing_lidar_right_distortion_corrector_node_callback_2",
+     "sensing_lidar_right_ring_outlier_filter_callback_0",
+     "sensing_lidar_concatenate_data_callback_4"
+    ]
+   ],
+   "branch_median_ms": [
+    1.7095
+   ],
+   "designations": 1,
+   "optimal_designations": 1,
+   "branch_cycle": false
+  },
+  {
+   "name": "top_lidar",
+   "nodes": [
+    "sensing_lidar_top_velodyne_driver_ros_wrapper_node_callback_0",
+    "sensing_lidar_top_crop_box_filter_self_callback_0",
+    "sensing_lidar_top_crop_box_filter_mirror_callback_0",
+    "sensing_lidar_top_distortion_corrector_node_callback_2",
+    "sensing_lidar_top_ring_outlier_filter_callback_0",
+    "sensing_lidar_concatenate_data_callback_2"
+   ],
+   "root": "sensing_lidar_top_velodyne_driver_ros_wrapper_node_callback_0",
+   "sinks": [
+    "sensing_lidar_concatenate_data_callback_2"
+   ],
+   "period_ms": 100.0,
+   "sum_median_ms": 74.3534,
+   "sum_p99_ms": 197.8006,
+   "u_median": 0.743534,
+   "branches": [
+    [
+     "sensing_lidar_top_crop_box_filter_self_callback_0",
+     "sensing_lidar_top_crop_box_filter_mirror_callback_0",
+     "sensing_lidar_top_distortion_corrector_node_callback_2",
+     "sensing_lidar_top_ring_outlier_filter_callback_0",
+     "sensing_lidar_concatenate_data_callback_2"
+    ]
+   ],
+   "branch_median_ms": [
+    50.4827
+   ],
+   "designations": 1,
+   "optimal_designations": 1,
+   "branch_cycle": false
+  },
+  {
+   "name": "vehicle",
+   "nodes": [
+    "sensing_vehicle_velocity_converter_callback_0",
+    "localization_twist_estimator_gyro_odometer_callback_0",
+    "vehicle_localization_pose_twist_fusion_filter_ekf_localizer_callback_3",
+    "vehicle_localization_pose_twist_fusion_filter_twist2accel_callback_1"
+   ],
+   "root": "sensing_vehicle_velocity_converter_callback_0",
+   "sinks": [
+    "vehicle_localization_pose_twist_fusion_filter_ekf_localizer_callback_3",
+    "vehicle_localization_pose_twist_fusion_filter_twist2accel_callback_1"
+   ],
+   "period_ms": 33.0,
+   "sum_median_ms": 0.2486,
+   "sum_p99_ms": 0.72,
+   "u_median": 0.007533,
+   "branches": [
+    [
+     "localization_twist_estimator_gyro_odometer_callback_0",
+     "vehicle_localization_pose_twist_fusion_filter_ekf_localizer_callback_3",
+     "vehicle_localization_pose_twist_fusion_filter_twist2accel_callback_1"
+    ]
+   ],
+   "branch_median_ms": [
+    0.1497
+   ],
+   "designations": 1,
+   "optimal_designations": 1,
+   "branch_cycle": false
+  }
+ ],
+ "nodes": [
+  {
+   "id": "control_trajectory_follower_controller_node_exe_callback_1",
+   "dag": "control",
+   "local_id": 0,
+   "file": "-control-trajectory_follower-controller_node_exe-callback_1.txt",
+   "seq_index": 0,
+   "period_ms": 30.0,
+   "deadline_ms": null,
+   "min_deadline_ms": 30.0,
+   "root": "control_trajectory_follower_controller_node_exe_callback_1",
+   "rm": 90,
+   "dm": 90,
+   "samples": 21972,
+   "median_ms": 2.761169,
+   "p99_ms": 9.402251,
+   "preds": [],
+   "succs": [
+    "control_autoware_shift_decider_callback_0",
+    "control_vehicle_cmd_gate_callback_16"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "control_autoware_shift_decider_callback_0",
+   "dag": "control",
+   "local_id": 1,
+   "file": "-control-autoware_shift_decider-callback_0.txt",
+   "seq_index": 1,
+   "period_ms": null,
+   "deadline_ms": 30.0,
+   "min_deadline_ms": 30.0,
+   "root": "control_trajectory_follower_controller_node_exe_callback_1",
+   "rm": 90,
+   "dm": 90,
+   "samples": 6591,
+   "median_ms": 0.066715,
+   "p99_ms": 0.298878,
+   "preds": [
+    "control_trajectory_follower_controller_node_exe_callback_1"
+   ],
+   "succs": [],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "control_vehicle_cmd_gate_callback_16",
+   "dag": "control",
+   "local_id": 2,
+   "file": "-control-vehicle_cmd_gate-callback_16.txt",
+   "seq_index": 2,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 30.0,
+   "root": "control_trajectory_follower_controller_node_exe_callback_1",
+   "rm": 90,
+   "dm": 90,
+   "samples": 18492,
+   "median_ms": 0.001823,
+   "p99_ms": 0.004219,
+   "preds": [
+    "control_trajectory_follower_controller_node_exe_callback_1"
+   ],
+   "succs": [
+    "raw_vehicle_cmd_converter_callback_2"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "raw_vehicle_cmd_converter_callback_2",
+   "dag": "control",
+   "local_id": 3,
+   "file": "-raw_vehicle_cmd_converter-callback_2.txt",
+   "seq_index": 3,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 30.0,
+   "root": "control_trajectory_follower_controller_node_exe_callback_1",
+   "rm": 90,
+   "dm": 90,
+   "samples": 21912,
+   "median_ms": 0.089791,
+   "p99_ms": 0.186774,
+   "preds": [
+    "control_vehicle_cmd_gate_callback_16"
+   ],
+   "succs": [
+    "pacmod_interface_callback_04"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "pacmod_interface_callback_04",
+   "dag": "control",
+   "local_id": 4,
+   "file": "-pacmod_interface-callback_04.txt",
+   "seq_index": 4,
+   "period_ms": null,
+   "deadline_ms": 30.0,
+   "min_deadline_ms": 30.0,
+   "root": "control_trajectory_follower_controller_node_exe_callback_1",
+   "rm": 90,
+   "dm": 90,
+   "samples": 6599,
+   "median_ms": 0.001159,
+   "p99_ms": 0.0031,
+   "preds": [
+    "raw_vehicle_cmd_converter_callback_2"
+   ],
+   "succs": [],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "localization_pose_twist_fusion_filter_ekf_localizer_callback_1",
+   "dag": "ekf_localizer",
+   "local_id": 0,
+   "file": "-localization-pose_twist_fusion_filter-ekf_localizer-callback_1.txt",
+   "seq_index": 5,
+   "period_ms": 20.0,
+   "deadline_ms": null,
+   "min_deadline_ms": 20.0,
+   "root": "localization_pose_twist_fusion_filter_ekf_localizer_callback_1",
+   "rm": 95,
+   "dm": 95,
+   "samples": 32893,
+   "median_ms": 1.398146,
+   "p99_ms": 7.068211,
+   "preds": [],
+   "succs": [
+    "localization_pose_estimator_ndt_scan_matcher_callback_1",
+    "localization_pose_twist_fusion_filter_stop_filter_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "localization_pose_estimator_ndt_scan_matcher_callback_1",
+   "dag": "ekf_localizer",
+   "local_id": 1,
+   "file": "-localization-pose_estimator-ndt_scan_matcher-callback_1.txt",
+   "seq_index": 6,
+   "period_ms": null,
+   "deadline_ms": 20.0,
+   "min_deadline_ms": 20.0,
+   "root": "localization_pose_twist_fusion_filter_ekf_localizer_callback_1",
+   "rm": 95,
+   "dm": 95,
+   "samples": 32948,
+   "median_ms": 0.098924,
+   "p99_ms": 0.309085,
+   "preds": [
+    "localization_pose_twist_fusion_filter_ekf_localizer_callback_1"
+   ],
+   "succs": [],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "localization_pose_twist_fusion_filter_stop_filter_callback_0",
+   "dag": "ekf_localizer",
+   "local_id": 2,
+   "file": "-localization-pose_twist_fusion_filter-stop_filter-callback_0.txt",
+   "seq_index": 7,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 20.0,
+   "root": "localization_pose_twist_fusion_filter_ekf_localizer_callback_1",
+   "rm": 95,
+   "dm": 95,
+   "samples": 32875,
+   "median_ms": 0.244851,
+   "p99_ms": 1.24397,
+   "preds": [
+    "localization_pose_twist_fusion_filter_ekf_localizer_callback_1"
+   ],
+   "succs": [
+    "localization_pose_twist_fusion_filter_twist2accel_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "localization_pose_twist_fusion_filter_twist2accel_callback_0",
+   "dag": "ekf_localizer",
+   "local_id": 3,
+   "file": "-localization-pose_twist_fusion_filter-twist2accel-callback_0.txt",
+   "seq_index": 8,
+   "period_ms": null,
+   "deadline_ms": 20.0,
+   "min_deadline_ms": 20.0,
+   "root": "localization_pose_twist_fusion_filter_ekf_localizer_callback_1",
+   "rm": 95,
+   "dm": 95,
+   "samples": 32855,
+   "median_ms": 0.093239,
+   "p99_ms": 0.280078,
+   "preds": [
+    "localization_pose_twist_fusion_filter_stop_filter_callback_0"
+   ],
+   "succs": [],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_gnss_gnss_poser_callback_1",
+   "dag": "gnss",
+   "local_id": 0,
+   "file": "-sensing-gnss-gnss_poser-callback_1.txt",
+   "seq_index": 9,
+   "period_ms": 1000.0,
+   "deadline_ms": null,
+   "min_deadline_ms": 1000.0,
+   "root": "sensing_gnss_gnss_poser_callback_1",
+   "rm": 50,
+   "dm": 50,
+   "samples": 3269,
+   "median_ms": 0.525726,
+   "p99_ms": 3.361194,
+   "preds": [],
+   "succs": [
+    "localization_util_pose_initializer_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "localization_util_pose_initializer_callback_0",
+   "dag": "gnss",
+   "local_id": 1,
+   "file": "-localization-util-pose_initializer-callback_0.txt",
+   "seq_index": 10,
+   "period_ms": null,
+   "deadline_ms": 1000.0,
+   "min_deadline_ms": 1000.0,
+   "root": "sensing_gnss_gnss_poser_callback_1",
+   "rm": 50,
+   "dm": 50,
+   "samples": 3266,
+   "median_ms": 0.002638,
+   "p99_ms": 0.007541,
+   "preds": [
+    "sensing_gnss_gnss_poser_callback_1"
+   ],
+   "succs": [],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_imu_imu_corrector_callback_0",
+   "dag": "imu",
+   "local_id": 0,
+   "file": "-sensing-imu-imu_corrector-callback_0.txt",
+   "seq_index": 11,
+   "period_ms": 33.0,
+   "deadline_ms": null,
+   "min_deadline_ms": 33.0,
+   "root": "sensing_imu_imu_corrector_callback_0",
+   "rm": 85,
+   "dm": 85,
+   "samples": 18636,
+   "median_ms": 0.116985,
+   "p99_ms": 0.347042,
+   "preds": [],
+   "succs": [
+    "localization_twist_estimator_gyro_odometer_callback_1"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "localization_twist_estimator_gyro_odometer_callback_1",
+   "dag": "imu",
+   "local_id": 1,
+   "file": "-localization-twist_estimator-gyro_odometer-callback_1.txt",
+   "seq_index": 12,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 33.0,
+   "root": "sensing_imu_imu_corrector_callback_0",
+   "rm": 85,
+   "dm": 85,
+   "samples": 18651,
+   "median_ms": 0.16299,
+   "p99_ms": 0.397641,
+   "preds": [
+    "sensing_imu_imu_corrector_callback_0"
+   ],
+   "succs": [
+    "imu_localization_pose_twist_fusion_filter_ekf_localizer_callback_3",
+    "imu_localization_pose_twist_fusion_filter_twist2accel_callback_1"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "imu_localization_pose_twist_fusion_filter_ekf_localizer_callback_3",
+   "dag": "imu",
+   "local_id": 2,
+   "file": "-localization-pose_twist_fusion_filter-ekf_localizer-callback_3.txt",
+   "seq_index": 13,
+   "period_ms": null,
+   "deadline_ms": 33.0,
+   "min_deadline_ms": 33.0,
+   "root": "sensing_imu_imu_corrector_callback_0",
+   "rm": 85,
+   "dm": 85,
+   "samples": 18208,
+   "median_ms": 0.002046,
+   "p99_ms": 0.00567,
+   "preds": [
+    "localization_twist_estimator_gyro_odometer_callback_1"
+   ],
+   "succs": [],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "imu_localization_pose_twist_fusion_filter_twist2accel_callback_1",
+   "dag": "imu",
+   "local_id": 3,
+   "file": "-localization-pose_twist_fusion_filter-twist2accel-callback_1.txt",
+   "seq_index": 14,
+   "period_ms": null,
+   "deadline_ms": 33.0,
+   "min_deadline_ms": 33.0,
+   "root": "sensing_imu_imu_corrector_callback_0",
+   "rm": 85,
+   "dm": 85,
+   "samples": 18171,
+   "median_ms": 0.00212,
+   "p99_ms": 0.004962,
+   "preds": [
+    "localization_twist_estimator_gyro_odometer_callback_1"
+   ],
+   "succs": [],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_left_velodyne_driver_ros_wrapper_node_callback_0",
+   "dag": "left_lidar",
+   "local_id": 0,
+   "file": "-sensing-lidar-left-velodyne_driver_ros_wrapper_node-callback_0.txt",
+   "seq_index": 15,
+   "period_ms": 100.0,
+   "deadline_ms": null,
+   "min_deadline_ms": 50.0,
+   "root": "sensing_lidar_left_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 80,
+   "samples": 6574,
+   "median_ms": 0.624957,
+   "p99_ms": 1.673203,
+   "preds": [],
+   "succs": [
+    "sensing_lidar_left_crop_box_filter_self_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_left_crop_box_filter_self_callback_0",
+   "dag": "left_lidar",
+   "local_id": 1,
+   "file": "-sensing-lidar-left-crop_box_filter_self-callback_0.txt",
+   "seq_index": 16,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 50.0,
+   "root": "sensing_lidar_left_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 80,
+   "samples": 6574,
+   "median_ms": 0.298295,
+   "p99_ms": 0.800931,
+   "preds": [
+    "sensing_lidar_left_velodyne_driver_ros_wrapper_node_callback_0"
+   ],
+   "succs": [
+    "sensing_lidar_left_crop_box_filter_mirror_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_left_crop_box_filter_mirror_callback_0",
+   "dag": "left_lidar",
+   "local_id": 2,
+   "file": "-sensing-lidar-left-crop_box_filter_mirror-callback_0.txt",
+   "seq_index": 17,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 50.0,
+   "root": "sensing_lidar_left_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 80,
+   "samples": 6574,
+   "median_ms": 0.164808,
+   "p99_ms": 0.412111,
+   "preds": [
+    "sensing_lidar_left_crop_box_filter_self_callback_0"
+   ],
+   "succs": [
+    "sensing_lidar_left_distortion_corrector_node_callback_2"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_left_distortion_corrector_node_callback_2",
+   "dag": "left_lidar",
+   "local_id": 3,
+   "file": "-sensing-lidar-left-distortion_corrector_node-callback_2.txt",
+   "seq_index": 18,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 50.0,
+   "root": "sensing_lidar_left_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 80,
+   "samples": 6574,
+   "median_ms": 0.608387,
+   "p99_ms": 1.748207,
+   "preds": [
+    "sensing_lidar_left_crop_box_filter_mirror_callback_0"
+   ],
+   "succs": [
+    "sensing_lidar_left_ring_outlier_filter_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_left_ring_outlier_filter_callback_0",
+   "dag": "left_lidar",
+   "local_id": 4,
+   "file": "-sensing-lidar-left-ring_outlier_filter-callback_0.txt",
+   "seq_index": 19,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 50.0,
+   "root": "sensing_lidar_left_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 80,
+   "samples": 6574,
+   "median_ms": 0.434763,
+   "p99_ms": 1.919905,
+   "preds": [
+    "sensing_lidar_left_distortion_corrector_node_callback_2"
+   ],
+   "succs": [
+    "sensing_lidar_concatenate_data_callback_3"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_concatenate_data_callback_3",
+   "dag": "left_lidar",
+   "local_id": 5,
+   "file": "-sensing-lidar-concatenate_data-callback_3.txt",
+   "seq_index": 20,
+   "period_ms": null,
+   "deadline_ms": 50.0,
+   "min_deadline_ms": 50.0,
+   "root": "sensing_lidar_left_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 80,
+   "samples": 6580,
+   "median_ms": 0.161047,
+   "p99_ms": 23.88012,
+   "preds": [
+    "sensing_lidar_left_ring_outlier_filter_callback_0"
+   ],
+   "succs": [],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_concatenate_data_callback_1",
+   "dag": "perception",
+   "local_id": 0,
+   "file": "-sensing-lidar-concatenate_data-callback_1.txt",
+   "seq_index": 21,
+   "period_ms": 100.0,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 82,
+   "median_ms": 7.690509,
+   "p99_ms": 31.951325,
+   "preds": [],
+   "succs": [
+    "perception_obstacle_segmentation_crop_box_filter_callback_0",
+    "perception_occupancy_grid_map_raw_pc_downsample_filter_callback_0",
+    "perception_object_recognition_detection_pointpainting_pointpainting_callback_14",
+    "localization_util_crop_box_filter_measurement_range_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "perception_obstacle_segmentation_crop_box_filter_callback_0",
+   "dag": "perception",
+   "local_id": 1,
+   "file": "-perception-obstacle_segmentation-crop_box_filter-callback_0.txt",
+   "seq_index": 22,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6621,
+   "median_ms": 2.835257,
+   "p99_ms": 15.676809,
+   "preds": [
+    "sensing_lidar_concatenate_data_callback_1"
+   ],
+   "succs": [
+    "perception_obstacle_segmentation_common_ground_filter_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "perception_obstacle_segmentation_common_ground_filter_callback_0",
+   "dag": "perception",
+   "local_id": 2,
+   "file": "-perception-obstacle_segmentation-common_ground_filter-callback_0.txt",
+   "seq_index": 23,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6621,
+   "median_ms": 27.581859,
+   "p99_ms": 57.965729,
+   "preds": [
+    "perception_obstacle_segmentation_crop_box_filter_callback_0"
+   ],
+   "succs": [
+    "perception_occupancy_grid_map_obstacle_pc_downsample_filter_callback_0",
+    "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "perception_occupancy_grid_map_raw_pc_downsample_filter_callback_0",
+   "dag": "perception",
+   "local_id": 3,
+   "file": "-perception-occupancy_grid_map-raw_pc_downsample_filter-callback_0.txt",
+   "seq_index": 24,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6621,
+   "median_ms": 12.302837,
+   "p99_ms": 38.834283,
+   "preds": [
+    "sensing_lidar_concatenate_data_callback_1"
+   ],
+   "succs": [
+    "perception_occupancy_grid_map_occupancy_grid_map_node_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "perception_object_recognition_detection_pointpainting_pointpainting_callback_14",
+   "dag": "perception",
+   "local_id": 4,
+   "file": "-perception-object_recognition-detection-pointpainting-pointpainting-callback_14.txt",
+   "seq_index": 25,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6622,
+   "median_ms": 21.228221,
+   "p99_ms": 124.227717,
+   "preds": [
+    "sensing_lidar_concatenate_data_callback_1"
+   ],
+   "succs": [
+    "perception_object_recognition_detection_roi_detected_object_fusion_callback_13"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "localization_util_crop_box_filter_measurement_range_callback_0",
+   "dag": "perception",
+   "local_id": 5,
+   "file": "-localization-util-crop_box_filter_measurement_range-callback_0.txt",
+   "seq_index": 26,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6621,
+   "median_ms": 3.184687,
+   "p99_ms": 16.053993,
+   "preds": [
+    "sensing_lidar_concatenate_data_callback_1"
+   ],
+   "succs": [
+    "localization_util_voxel_grid_downsample_filter_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "perception_object_recognition_detection_roi_detected_object_fusion_callback_13",
+   "dag": "perception",
+   "local_id": 6,
+   "file": "-perception-object_recognition-detection-roi_detected_object_fusion-callback_13.txt",
+   "seq_index": 27,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6613,
+   "median_ms": 0.433926,
+   "p99_ms": 1.231468,
+   "preds": [
+    "perception_object_recognition_detection_pointpainting_pointpainting_callback_14"
+   ],
+   "succs": [
+    "perception_object_recognition_detection_obstacle_pointcloud_based_validator_node_callback_1"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "localization_util_voxel_grid_downsample_filter_callback_0",
+   "dag": "perception",
+   "local_id": 7,
+   "file": "-localization-util-voxel_grid_downsample_filter-callback_0.txt",
+   "seq_index": 28,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6621,
+   "median_ms": 13.376263,
+   "p99_ms": 34.202663,
+   "preds": [
+    "localization_util_crop_box_filter_measurement_range_callback_0",
+    "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1"
+   ],
+   "succs": [
+    "localization_util_random_downsample_filter_callback_0",
+    "perception_object_recognition_detection_voxel_based_compare_map_filter_callback_1"
+   ],
+   "trigger": "localization_util_crop_box_filter_measurement_range_callback_0",
+   "latest_inputs": [
+    "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1"
+   ]
+  },
+  {
+   "id": "perception_occupancy_grid_map_occupancy_grid_map_node_callback_0",
+   "dag": "perception",
+   "local_id": 8,
+   "file": "-perception-occupancy_grid_map-occupancy_grid_map_node-callback_0.txt",
+   "seq_index": 29,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6621,
+   "median_ms": 27.237292,
+   "p99_ms": 59.694814,
+   "preds": [
+    "perception_occupancy_grid_map_raw_pc_downsample_filter_callback_0",
+    "perception_occupancy_grid_map_obstacle_pc_downsample_filter_callback_0"
+   ],
+   "succs": [
+    "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1"
+   ],
+   "trigger": "perception_occupancy_grid_map_raw_pc_downsample_filter_callback_0",
+   "latest_inputs": [
+    "perception_occupancy_grid_map_obstacle_pc_downsample_filter_callback_0"
+   ]
+  },
+  {
+   "id": "perception_occupancy_grid_map_obstacle_pc_downsample_filter_callback_0",
+   "dag": "perception",
+   "local_id": 9,
+   "file": "-perception-occupancy_grid_map-obstacle_pc_downsample_filter-callback_0.txt",
+   "seq_index": 30,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6622,
+   "median_ms": 2.805576,
+   "p99_ms": 12.832391,
+   "preds": [
+    "perception_obstacle_segmentation_common_ground_filter_callback_0"
+   ],
+   "succs": [
+    "perception_occupancy_grid_map_occupancy_grid_map_node_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "perception_object_recognition_detection_obstacle_pointcloud_based_validator_node_callback_1",
+   "dag": "perception",
+   "local_id": 10,
+   "file": "-perception-object_recognition-detection-obstacle_pointcloud_based_validator_node-callback_1.txt",
+   "seq_index": 31,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6616,
+   "median_ms": 2.135161,
+   "p99_ms": 7.228063,
+   "preds": [
+    "perception_object_recognition_detection_roi_detected_object_fusion_callback_13",
+    "perception_object_recognition_detection_voxel_based_compare_map_filter_callback_1"
+   ],
+   "succs": [
+    "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2520929050865267140_callback_1"
+   ],
+   "trigger": "perception_object_recognition_detection_roi_detected_object_fusion_callback_13",
+   "latest_inputs": [
+    "perception_object_recognition_detection_voxel_based_compare_map_filter_callback_1"
+   ]
+  },
+  {
+   "id": "perception_object_recognition_detection_voxel_based_compare_map_filter_callback_1",
+   "dag": "perception",
+   "local_id": 11,
+   "file": "-perception-object_recognition-detection-voxel_based_compare_map_filter-callback_1.txt",
+   "seq_index": 32,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6622,
+   "median_ms": 32.548529,
+   "p99_ms": 64.057709,
+   "preds": [
+    "localization_util_voxel_grid_downsample_filter_callback_0"
+   ],
+   "succs": [
+    "perception_object_recognition_detection_obstacle_pointcloud_based_validator_node_callback_1",
+    "perception_object_recognition_detection_clustering_roi_cluster_roi_pointcloud_fusion_callback_13",
+    "perception_object_recognition_detection_clustering_low_height_crop_box_filter_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1",
+   "dag": "perception",
+   "local_id": 12,
+   "file": "-perception-obstacle_segmentation-occupancy_grid_based_outlier_filter-callback_1.txt",
+   "seq_index": 33,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6622,
+   "median_ms": 14.30157,
+   "p99_ms": 44.943113,
+   "preds": [
+    "perception_obstacle_segmentation_common_ground_filter_callback_0",
+    "perception_occupancy_grid_map_occupancy_grid_map_node_callback_0"
+   ],
+   "succs": [
+    "localization_util_voxel_grid_downsample_filter_callback_0",
+    "planning_scenario_planning_lane_driving_motion_planning_surround_obstacle_checker_callback_4"
+   ],
+   "trigger": "perception_occupancy_grid_map_occupancy_grid_map_node_callback_0",
+   "latest_inputs": [
+    "perception_obstacle_segmentation_common_ground_filter_callback_0"
+   ]
+  },
+  {
+   "id": "localization_util_random_downsample_filter_callback_0",
+   "dag": "perception",
+   "local_id": 13,
+   "file": "-localization-util-random_downsample_filter-callback_0.txt",
+   "seq_index": 34,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6622,
+   "median_ms": 0.163451,
+   "p99_ms": 5.347161,
+   "preds": [
+    "localization_util_voxel_grid_downsample_filter_callback_0"
+   ],
+   "succs": [
+    "localization_pose_estimator_ndt_scan_matcher_callback_2"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "localization_pose_estimator_ndt_scan_matcher_callback_2",
+   "dag": "perception",
+   "local_id": 14,
+   "file": "-localization-pose_estimator-ndt_scan_matcher-callback_2.txt",
+   "seq_index": 35,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6634,
+   "median_ms": 9.886935,
+   "p99_ms": 30.954984,
+   "preds": [
+    "localization_util_random_downsample_filter_callback_0"
+   ],
+   "succs": [
+    "localization_pose_twist_fusion_filter_ekf_localizer_callback_2"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "localization_pose_twist_fusion_filter_ekf_localizer_callback_2",
+   "dag": "perception",
+   "local_id": 15,
+   "file": "-localization-pose_twist_fusion_filter-ekf_localizer-callback_2.txt",
+   "seq_index": 36,
+   "period_ms": null,
+   "deadline_ms": 300.0,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6593,
+   "median_ms": 0.001837,
+   "p99_ms": 0.00486,
+   "preds": [
+    "localization_pose_estimator_ndt_scan_matcher_callback_2"
+   ],
+   "succs": [],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2520929050865267140_callback_1",
+   "dag": "perception",
+   "local_id": 16,
+   "file": "-perception-object_recognition-detection-object_association_merger_autoware_ecu_373458_2520929050865267140-callback_1.txt",
+   "seq_index": 37,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6622,
+   "median_ms": 2.044509,
+   "p99_ms": 17.658108,
+   "preds": [
+    "perception_object_recognition_detection_clustering_camera_lidar_fusion_detected_object_feature_remover_callback_0",
+    "perception_object_recognition_detection_obstacle_pointcloud_based_validator_node_callback_1"
+   ],
+   "succs": [
+    "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2698618723653090675_callback_0"
+   ],
+   "trigger": "perception_object_recognition_detection_obstacle_pointcloud_based_validator_node_callback_1",
+   "latest_inputs": [
+    "perception_object_recognition_detection_clustering_camera_lidar_fusion_detected_object_feature_remover_callback_0"
+   ]
+  },
+  {
+   "id": "perception_object_recognition_detection_clustering_camera_lidar_fusion_detected_object_feature_remover_callback_0",
+   "dag": "perception",
+   "local_id": 17,
+   "file": "-perception-object_recognition-detection-clustering-camera_lidar_fusion-detected_object_feature_remover-callback_0.txt",
+   "seq_index": 38,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6633,
+   "median_ms": 0.538271,
+   "p99_ms": 1.701961,
+   "preds": [
+    "perception_object_recognition_detection_clustering_shape_estimation_callback_0"
+   ],
+   "succs": [
+    "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2520929050865267140_callback_1"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "perception_object_recognition_detection_clustering_shape_estimation_callback_0",
+   "dag": "perception",
+   "local_id": 18,
+   "file": "-perception-object_recognition-detection-clustering-shape_estimation-callback_0.txt",
+   "seq_index": 39,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6636,
+   "median_ms": 2.298212,
+   "p99_ms": 11.278824,
+   "preds": [
+    "perception_object_recognition_detection_clustering_cluster_merger_callback_0",
+    "perception_object_recognition_detection_clustering_camera_lidar_fusion_low_intensity_cluster_filter_node_callback_0"
+   ],
+   "succs": [
+    "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_1",
+    "perception_object_recognition_detection_clustering_camera_lidar_fusion_detected_object_feature_remover_callback_0"
+   ],
+   "trigger": "perception_object_recognition_detection_clustering_cluster_merger_callback_0",
+   "latest_inputs": [
+    "perception_object_recognition_detection_clustering_camera_lidar_fusion_low_intensity_cluster_filter_node_callback_0"
+   ]
+  },
+  {
+   "id": "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2698618723653090675_callback_0",
+   "dag": "perception",
+   "local_id": 19,
+   "file": "-perception-object_recognition-detection-object_association_merger_autoware_ecu_373458_2698618723653090675-callback_0.txt",
+   "seq_index": 40,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6619,
+   "median_ms": 1.674312,
+   "p99_ms": 13.950758,
+   "preds": [
+    "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_1",
+    "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2520929050865267140_callback_1"
+   ],
+   "succs": [
+    "perception_object_recognition_detection_object_lanelet_filter_callback_0"
+   ],
+   "trigger": "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2520929050865267140_callback_1",
+   "latest_inputs": [
+    "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_1"
+   ]
+  },
+  {
+   "id": "perception_object_recognition_detection_object_lanelet_filter_callback_0",
+   "dag": "perception",
+   "local_id": 20,
+   "file": "-perception-object_recognition-detection-object_lanelet_filter-callback_0.txt",
+   "seq_index": 41,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6625,
+   "median_ms": 1.745359,
+   "p99_ms": 11.153935,
+   "preds": [
+    "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2698618723653090675_callback_0"
+   ],
+   "succs": [
+    "perception_object_recognition_tracking_multi_object_tracker_callback_3"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "perception_object_recognition_tracking_multi_object_tracker_callback_3",
+   "dag": "perception",
+   "local_id": 21,
+   "file": "-perception-object_recognition-tracking-multi_object_tracker-callback_3.txt",
+   "seq_index": 42,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6610,
+   "median_ms": 1.402232,
+   "p99_ms": 12.857011,
+   "preds": [
+    "perception_object_recognition_detection_object_lanelet_filter_callback_0"
+   ],
+   "succs": [
+    "perception_object_recognition_tracking_decorative_tracker_merger_autoware_ecu_373458_2496151694788268076_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "perception_object_recognition_detection_clustering_camera_lidar_fusion_low_intensity_cluster_filter_node_callback_0",
+   "dag": "perception",
+   "local_id": 22,
+   "file": "-perception-object_recognition-detection-clustering-camera_lidar_fusion-low_intensity_cluster_filter_node-callback_0.txt",
+   "seq_index": 43,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6619,
+   "median_ms": 1.19657,
+   "p99_ms": 3.477836,
+   "preds": [
+    "perception_object_recognition_detection_clustering_camera_lidar_fusion_roi_cluster_fusion_callback_13"
+   ],
+   "succs": [
+    "perception_object_recognition_detection_clustering_shape_estimation_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "perception_object_recognition_detection_clustering_cluster_merger_callback_0",
+   "dag": "perception",
+   "local_id": 23,
+   "file": "-perception-object_recognition-detection-clustering-cluster_merger-callback_0.txt",
+   "seq_index": 44,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6630,
+   "median_ms": 1.216222,
+   "p99_ms": 4.023803,
+   "preds": [
+    "perception_object_recognition_detection_clustering_roi_cluster_roi_pointcloud_fusion_callback_13",
+    "perception_object_recognition_detection_clustering_euclidean_cluster_callback_0"
+   ],
+   "succs": [
+    "perception_object_recognition_detection_clustering_shape_estimation_callback_0",
+    "perception_object_recognition_detection_clustering_camera_lidar_fusion_roi_cluster_fusion_callback_13"
+   ],
+   "trigger": "perception_object_recognition_detection_clustering_roi_cluster_roi_pointcloud_fusion_callback_13",
+   "latest_inputs": [
+    "perception_object_recognition_detection_clustering_euclidean_cluster_callback_0"
+   ]
+  },
+  {
+   "id": "perception_object_recognition_detection_clustering_camera_lidar_fusion_roi_cluster_fusion_callback_13",
+   "dag": "perception",
+   "local_id": 24,
+   "file": "-perception-object_recognition-detection-clustering-camera_lidar_fusion-roi_cluster_fusion-callback_13.txt",
+   "seq_index": 45,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6617,
+   "median_ms": 4.222867,
+   "p99_ms": 18.273042,
+   "preds": [
+    "perception_object_recognition_detection_clustering_cluster_merger_callback_0"
+   ],
+   "succs": [
+    "perception_object_recognition_detection_clustering_camera_lidar_fusion_low_intensity_cluster_filter_node_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "perception_object_recognition_detection_clustering_euclidean_cluster_callback_0",
+   "dag": "perception",
+   "local_id": 25,
+   "file": "-perception-object_recognition-detection-clustering-euclidean_cluster-callback_0.txt",
+   "seq_index": 46,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6621,
+   "median_ms": 5.973587,
+   "p99_ms": 20.229648,
+   "preds": [
+    "perception_object_recognition_detection_clustering_low_height_crop_box_filter_callback_0"
+   ],
+   "succs": [
+    "perception_object_recognition_detection_clustering_cluster_merger_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "perception_object_recognition_detection_clustering_low_height_crop_box_filter_callback_0",
+   "dag": "perception",
+   "local_id": 26,
+   "file": "-perception-object_recognition-detection-clustering-low_height_crop_box_filter-callback_0.txt",
+   "seq_index": 47,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6621,
+   "median_ms": 0.230786,
+   "p99_ms": 0.658749,
+   "preds": [
+    "perception_object_recognition_detection_voxel_based_compare_map_filter_callback_1"
+   ],
+   "succs": [
+    "perception_object_recognition_detection_clustering_euclidean_cluster_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "planning_scenario_planning_lane_driving_motion_planning_surround_obstacle_checker_callback_4",
+   "dag": "perception",
+   "local_id": 27,
+   "file": "-planning-scenario_planning-lane_driving-motion_planning-surround_obstacle_checker-callback_4.txt",
+   "seq_index": 48,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 32836,
+   "median_ms": 0.006162,
+   "p99_ms": 0.017183,
+   "preds": [
+    "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1"
+   ],
+   "succs": [
+    "planning_scenario_planning_external_velocity_limit_selector_callback_1"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "perception_object_recognition_tracking_decorative_tracker_merger_autoware_ecu_373458_2496151694788268076_callback_0",
+   "dag": "perception",
+   "local_id": 28,
+   "file": "-perception-object_recognition-tracking-decorative_tracker_merger_autoware_ecu_373458_2496151694788268076-callback_0.txt",
+   "seq_index": 49,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6573,
+   "median_ms": 1.188444,
+   "p99_ms": 5.522103,
+   "preds": [
+    "perception_object_recognition_tracking_multi_object_tracker_callback_3"
+   ],
+   "succs": [
+    "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_0",
+    "perception_object_recognition_prediction_map_based_prediction_callback_1"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "perception_object_recognition_prediction_map_based_prediction_callback_1",
+   "dag": "perception",
+   "local_id": 29,
+   "file": "-perception-object_recognition-prediction-map_based_prediction-callback_1.txt",
+   "seq_index": 50,
+   "period_ms": null,
+   "deadline_ms": 300.0,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6577,
+   "median_ms": 19.276737,
+   "p99_ms": 125.233836,
+   "preds": [
+    "perception_object_recognition_tracking_decorative_tracker_merger_autoware_ecu_373458_2496151694788268076_callback_0"
+   ],
+   "succs": [],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "planning_scenario_planning_external_velocity_limit_selector_callback_1",
+   "dag": "perception",
+   "local_id": 30,
+   "file": "-planning-scenario_planning-external_velocity_limit_selector-callback_1.txt",
+   "seq_index": 51,
+   "period_ms": null,
+   "deadline_ms": 300.0,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 706,
+   "median_ms": 0.110031,
+   "p99_ms": 0.199066,
+   "preds": [
+    "planning_scenario_planning_lane_driving_motion_planning_surround_obstacle_checker_callback_4"
+   ],
+   "succs": [],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "perception_object_recognition_detection_clustering_roi_cluster_roi_pointcloud_fusion_callback_13",
+   "dag": "perception",
+   "local_id": 31,
+   "file": "-perception-object_recognition-detection-clustering-roi_cluster-roi_pointcloud_fusion-callback_13.txt",
+   "seq_index": 52,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6625,
+   "median_ms": 0.186141,
+   "p99_ms": 1.487608,
+   "preds": [
+    "perception_object_recognition_detection_voxel_based_compare_map_filter_callback_1"
+   ],
+   "succs": [
+    "perception_object_recognition_detection_clustering_cluster_merger_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_1",
+   "dag": "perception",
+   "local_id": 32,
+   "file": "-perception-object_recognition-detection-detection_by_tracker-detection_by_tracker_node-callback_1.txt",
+   "seq_index": 53,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6638,
+   "median_ms": 8.11572,
+   "p99_ms": 36.651093,
+   "preds": [
+    "perception_object_recognition_detection_clustering_shape_estimation_callback_0"
+   ],
+   "succs": [
+    "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2698618723653090675_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_0",
+   "dag": "perception",
+   "local_id": 33,
+   "file": "-perception-object_recognition-detection-detection_by_tracker-detection_by_tracker_node-callback_0.txt",
+   "seq_index": 54,
+   "period_ms": null,
+   "deadline_ms": 300.0,
+   "min_deadline_ms": 300.0,
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "rm": 70,
+   "dm": 60,
+   "samples": 6600,
+   "median_ms": 0.010915,
+   "p99_ms": 0.059704,
+   "preds": [
+    "perception_object_recognition_tracking_decorative_tracker_merger_autoware_ecu_373458_2496151694788268076_callback_0"
+   ],
+   "succs": [],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "planning_scenario_planning_lane_driving_behavior_planning_behavior_path_planner_callback_00",
+   "dag": "planning",
+   "local_id": 0,
+   "file": "-planning-scenario_planning-lane_driving-behavior_planning-behavior_path_planner-callback_00.txt",
+   "seq_index": 55,
+   "period_ms": 100.0,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "planning_scenario_planning_lane_driving_behavior_planning_behavior_path_planner_callback_00",
+   "rm": 70,
+   "dm": 60,
+   "samples": 5034,
+   "median_ms": 0.031715,
+   "p99_ms": 0.169766,
+   "preds": [],
+   "succs": [
+    "planning_scenario_planning_lane_driving_behavior_planning_behavior_velocity_planner_callback_13"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "planning_scenario_planning_lane_driving_behavior_planning_behavior_velocity_planner_callback_13",
+   "dag": "planning",
+   "local_id": 1,
+   "file": "-planning-scenario_planning-lane_driving-behavior_planning-behavior_velocity_planner-callback_13.txt",
+   "seq_index": 56,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "planning_scenario_planning_lane_driving_behavior_planning_behavior_path_planner_callback_00",
+   "rm": 70,
+   "dm": 60,
+   "samples": 5059,
+   "median_ms": 37.138931,
+   "p99_ms": 126.054735,
+   "preds": [
+    "planning_scenario_planning_lane_driving_behavior_planning_behavior_path_planner_callback_00"
+   ],
+   "succs": [
+    "planning_scenario_planning_lane_driving_motion_planning_elastic_band_smoother_callback_1"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "planning_scenario_planning_lane_driving_motion_planning_elastic_band_smoother_callback_1",
+   "dag": "planning",
+   "local_id": 2,
+   "file": "-planning-scenario_planning-lane_driving-motion_planning-elastic_band_smoother-callback_1.txt",
+   "seq_index": 57,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "planning_scenario_planning_lane_driving_behavior_planning_behavior_path_planner_callback_00",
+   "rm": 70,
+   "dm": 60,
+   "samples": 5062,
+   "median_ms": 3.70262,
+   "p99_ms": 14.576561,
+   "preds": [
+    "planning_scenario_planning_lane_driving_behavior_planning_behavior_velocity_planner_callback_13"
+   ],
+   "succs": [
+    "planning_scenario_planning_lane_driving_motion_planning_path_optimizer_callback_1"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "planning_scenario_planning_lane_driving_motion_planning_path_optimizer_callback_1",
+   "dag": "planning",
+   "local_id": 3,
+   "file": "-planning-scenario_planning-lane_driving-motion_planning-path_optimizer-callback_1.txt",
+   "seq_index": 58,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "planning_scenario_planning_lane_driving_behavior_planning_behavior_path_planner_callback_00",
+   "rm": 70,
+   "dm": 60,
+   "samples": 5062,
+   "median_ms": 14.129298,
+   "p99_ms": 39.915427,
+   "preds": [
+    "planning_scenario_planning_lane_driving_motion_planning_elastic_band_smoother_callback_1"
+   ],
+   "succs": [
+    "planning_scenario_planning_lane_driving_motion_planning_motion_velocity_planner_callback_7"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "planning_scenario_planning_lane_driving_motion_planning_motion_velocity_planner_callback_7",
+   "dag": "planning",
+   "local_id": 4,
+   "file": "-planning-scenario_planning-lane_driving-motion_planning-motion_velocity_planner-callback_7.txt",
+   "seq_index": 59,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "planning_scenario_planning_lane_driving_behavior_planning_behavior_path_planner_callback_00",
+   "rm": 70,
+   "dm": 60,
+   "samples": 5033,
+   "median_ms": 36.39102,
+   "p99_ms": 106.622141,
+   "preds": [
+    "planning_scenario_planning_lane_driving_motion_planning_path_optimizer_callback_1"
+   ],
+   "succs": [
+    "planning_scenario_planning_lane_driving_motion_planning_obstacle_cruise_planner_callback_3"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "planning_scenario_planning_lane_driving_motion_planning_obstacle_cruise_planner_callback_3",
+   "dag": "planning",
+   "local_id": 5,
+   "file": "-planning-scenario_planning-lane_driving-motion_planning-obstacle_cruise_planner-callback_3.txt",
+   "seq_index": 60,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "planning_scenario_planning_lane_driving_behavior_planning_behavior_path_planner_callback_00",
+   "rm": 70,
+   "dm": 60,
+   "samples": 5034,
+   "median_ms": 2.581551,
+   "p99_ms": 16.238687,
+   "preds": [
+    "planning_scenario_planning_lane_driving_motion_planning_motion_velocity_planner_callback_7"
+   ],
+   "succs": [
+    "planning_scenario_planning_scenario_selector_callback_1"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "planning_scenario_planning_scenario_selector_callback_1",
+   "dag": "planning",
+   "local_id": 6,
+   "file": "-planning-scenario_planning-scenario_selector-callback_1.txt",
+   "seq_index": 61,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "planning_scenario_planning_lane_driving_behavior_planning_behavior_path_planner_callback_00",
+   "rm": 70,
+   "dm": 60,
+   "samples": 5048,
+   "median_ms": 0.145556,
+   "p99_ms": 0.41845,
+   "preds": [
+    "planning_scenario_planning_lane_driving_motion_planning_obstacle_cruise_planner_callback_3"
+   ],
+   "succs": [
+    "planning_scenario_planning_velocity_smoother_callback_4"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "planning_scenario_planning_velocity_smoother_callback_4",
+   "dag": "planning",
+   "local_id": 7,
+   "file": "-planning-scenario_planning-velocity_smoother-callback_4.txt",
+   "seq_index": 62,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 300.0,
+   "root": "planning_scenario_planning_lane_driving_behavior_planning_behavior_path_planner_callback_00",
+   "rm": 70,
+   "dm": 60,
+   "samples": 5045,
+   "median_ms": 12.509505,
+   "p99_ms": 32.942527,
+   "preds": [
+    "planning_scenario_planning_scenario_selector_callback_1"
+   ],
+   "succs": [
+    "planning_planning_validator_callback_2"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "planning_planning_validator_callback_2",
+   "dag": "planning",
+   "local_id": 8,
+   "file": "-planning-planning_validator-callback_2.txt",
+   "seq_index": 63,
+   "period_ms": null,
+   "deadline_ms": 300.0,
+   "min_deadline_ms": 300.0,
+   "root": "planning_scenario_planning_lane_driving_behavior_planning_behavior_path_planner_callback_00",
+   "rm": 70,
+   "dm": 60,
+   "samples": 5054,
+   "median_ms": 0.47507,
+   "p99_ms": 1.14539,
+   "preds": [
+    "planning_scenario_planning_velocity_smoother_callback_4"
+   ],
+   "succs": [],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_rear_velodyne_driver_ros_wrapper_node_callback_0",
+   "dag": "rear_lidar",
+   "local_id": 0,
+   "file": "-sensing-lidar-rear-velodyne_driver_ros_wrapper_node-callback_0.txt",
+   "seq_index": 64,
+   "period_ms": 100.0,
+   "deadline_ms": null,
+   "min_deadline_ms": 50.0,
+   "root": "sensing_lidar_rear_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 80,
+   "samples": 6569,
+   "median_ms": 0.184039,
+   "p99_ms": 0.317843,
+   "preds": [],
+   "succs": [
+    "sensing_lidar_rear_crop_box_filter_self_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_rear_crop_box_filter_self_callback_0",
+   "dag": "rear_lidar",
+   "local_id": 1,
+   "file": "-sensing-lidar-rear-crop_box_filter_self-callback_0.txt",
+   "seq_index": 65,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 50.0,
+   "root": "sensing_lidar_rear_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 80,
+   "samples": 6569,
+   "median_ms": 0.152444,
+   "p99_ms": 0.333121,
+   "preds": [
+    "sensing_lidar_rear_velodyne_driver_ros_wrapper_node_callback_0"
+   ],
+   "succs": [
+    "sensing_lidar_rear_crop_box_filter_mirror_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_rear_crop_box_filter_mirror_callback_0",
+   "dag": "rear_lidar",
+   "local_id": 2,
+   "file": "-sensing-lidar-rear-crop_box_filter_mirror-callback_0.txt",
+   "seq_index": 66,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 50.0,
+   "root": "sensing_lidar_rear_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 80,
+   "samples": 6570,
+   "median_ms": 0.061741,
+   "p99_ms": 0.120434,
+   "preds": [
+    "sensing_lidar_rear_crop_box_filter_self_callback_0"
+   ],
+   "succs": [
+    "sensing_lidar_rear_distortion_corrector_node_callback_2"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_rear_distortion_corrector_node_callback_2",
+   "dag": "rear_lidar",
+   "local_id": 3,
+   "file": "-sensing-lidar-rear-distortion_corrector_node-callback_2.txt",
+   "seq_index": 67,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 50.0,
+   "root": "sensing_lidar_rear_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 80,
+   "samples": 6570,
+   "median_ms": 0.058987,
+   "p99_ms": 0.146318,
+   "preds": [
+    "sensing_lidar_rear_crop_box_filter_mirror_callback_0"
+   ],
+   "succs": [
+    "sensing_lidar_rear_ring_outlier_filter_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_rear_ring_outlier_filter_callback_0",
+   "dag": "rear_lidar",
+   "local_id": 4,
+   "file": "-sensing-lidar-rear-ring_outlier_filter-callback_0.txt",
+   "seq_index": 68,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 50.0,
+   "root": "sensing_lidar_rear_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 80,
+   "samples": 6570,
+   "median_ms": 0.140267,
+   "p99_ms": 0.260929,
+   "preds": [
+    "sensing_lidar_rear_distortion_corrector_node_callback_2"
+   ],
+   "succs": [
+    "sensing_lidar_concatenate_data_callback_5"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_concatenate_data_callback_5",
+   "dag": "rear_lidar",
+   "local_id": 5,
+   "file": "-sensing-lidar-concatenate_data-callback_5.txt",
+   "seq_index": 69,
+   "period_ms": null,
+   "deadline_ms": 50.0,
+   "min_deadline_ms": 50.0,
+   "root": "sensing_lidar_rear_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 80,
+   "samples": 6580,
+   "median_ms": 0.023431,
+   "p99_ms": 20.296122,
+   "preds": [
+    "sensing_lidar_rear_ring_outlier_filter_callback_0"
+   ],
+   "succs": [],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_right_velodyne_driver_ros_wrapper_node_callback_0",
+   "dag": "right_lidar",
+   "local_id": 0,
+   "file": "-sensing-lidar-right-velodyne_driver_ros_wrapper_node-callback_0.txt",
+   "seq_index": 70,
+   "period_ms": 100.0,
+   "deadline_ms": null,
+   "min_deadline_ms": 50.0,
+   "root": "sensing_lidar_right_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 80,
+   "samples": 6584,
+   "median_ms": 0.63798,
+   "p99_ms": 1.573136,
+   "preds": [],
+   "succs": [
+    "sensing_lidar_right_crop_box_filter_self_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_right_crop_box_filter_self_callback_0",
+   "dag": "right_lidar",
+   "local_id": 1,
+   "file": "-sensing-lidar-right-crop_box_filter_self-callback_0.txt",
+   "seq_index": 71,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 50.0,
+   "root": "sensing_lidar_right_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 80,
+   "samples": 6584,
+   "median_ms": 0.309191,
+   "p99_ms": 0.837101,
+   "preds": [
+    "sensing_lidar_right_velodyne_driver_ros_wrapper_node_callback_0"
+   ],
+   "succs": [
+    "sensing_lidar_right_crop_box_filter_mirror_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_right_crop_box_filter_mirror_callback_0",
+   "dag": "right_lidar",
+   "local_id": 2,
+   "file": "-sensing-lidar-right-crop_box_filter_mirror-callback_0.txt",
+   "seq_index": 72,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 50.0,
+   "root": "sensing_lidar_right_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 80,
+   "samples": 6584,
+   "median_ms": 0.170466,
+   "p99_ms": 0.469826,
+   "preds": [
+    "sensing_lidar_right_crop_box_filter_self_callback_0"
+   ],
+   "succs": [
+    "sensing_lidar_right_distortion_corrector_node_callback_2"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_right_distortion_corrector_node_callback_2",
+   "dag": "right_lidar",
+   "local_id": 3,
+   "file": "-sensing-lidar-right-distortion_corrector_node-callback_2.txt",
+   "seq_index": 73,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 50.0,
+   "root": "sensing_lidar_right_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 80,
+   "samples": 6584,
+   "median_ms": 0.618837,
+   "p99_ms": 1.675987,
+   "preds": [
+    "sensing_lidar_right_crop_box_filter_mirror_callback_0"
+   ],
+   "succs": [
+    "sensing_lidar_right_ring_outlier_filter_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_right_ring_outlier_filter_callback_0",
+   "dag": "right_lidar",
+   "local_id": 4,
+   "file": "-sensing-lidar-right-ring_outlier_filter-callback_0.txt",
+   "seq_index": 74,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 50.0,
+   "root": "sensing_lidar_right_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 80,
+   "samples": 6584,
+   "median_ms": 0.444183,
+   "p99_ms": 2.067276,
+   "preds": [
+    "sensing_lidar_right_distortion_corrector_node_callback_2"
+   ],
+   "succs": [
+    "sensing_lidar_concatenate_data_callback_4"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_concatenate_data_callback_4",
+   "dag": "right_lidar",
+   "local_id": 5,
+   "file": "-sensing-lidar-concatenate_data-callback_4.txt",
+   "seq_index": 75,
+   "period_ms": null,
+   "deadline_ms": 50.0,
+   "min_deadline_ms": 50.0,
+   "root": "sensing_lidar_right_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 80,
+   "samples": 6580,
+   "median_ms": 0.166865,
+   "p99_ms": 29.110426,
+   "preds": [
+    "sensing_lidar_right_ring_outlier_filter_callback_0"
+   ],
+   "succs": [],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_top_velodyne_driver_ros_wrapper_node_callback_0",
+   "dag": "top_lidar",
+   "local_id": 0,
+   "file": "-sensing-lidar-top-velodyne_driver_ros_wrapper_node-callback_0.txt",
+   "seq_index": 76,
+   "period_ms": 100.0,
+   "deadline_ms": null,
+   "min_deadline_ms": 100.0,
+   "root": "sensing_lidar_top_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 75,
+   "samples": 6597,
+   "median_ms": 23.870685,
+   "p99_ms": 54.536327,
+   "preds": [],
+   "succs": [
+    "sensing_lidar_top_crop_box_filter_self_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_top_crop_box_filter_self_callback_0",
+   "dag": "top_lidar",
+   "local_id": 1,
+   "file": "-sensing-lidar-top-crop_box_filter_self-callback_0.txt",
+   "seq_index": 77,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 100.0,
+   "root": "sensing_lidar_top_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 75,
+   "samples": 6598,
+   "median_ms": 5.235066,
+   "p99_ms": 20.356906,
+   "preds": [
+    "sensing_lidar_top_velodyne_driver_ros_wrapper_node_callback_0"
+   ],
+   "succs": [
+    "sensing_lidar_top_crop_box_filter_mirror_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_top_crop_box_filter_mirror_callback_0",
+   "dag": "top_lidar",
+   "local_id": 2,
+   "file": "-sensing-lidar-top-crop_box_filter_mirror-callback_0.txt",
+   "seq_index": 78,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 100.0,
+   "root": "sensing_lidar_top_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 75,
+   "samples": 6598,
+   "median_ms": 4.300549,
+   "p99_ms": 20.161343,
+   "preds": [
+    "sensing_lidar_top_crop_box_filter_self_callback_0"
+   ],
+   "succs": [
+    "sensing_lidar_top_distortion_corrector_node_callback_2"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_top_distortion_corrector_node_callback_2",
+   "dag": "top_lidar",
+   "local_id": 3,
+   "file": "-sensing-lidar-top-distortion_corrector_node-callback_2.txt",
+   "seq_index": 79,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 100.0,
+   "root": "sensing_lidar_top_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 75,
+   "samples": 6599,
+   "median_ms": 13.496679,
+   "p99_ms": 39.758112,
+   "preds": [
+    "sensing_lidar_top_crop_box_filter_mirror_callback_0"
+   ],
+   "succs": [
+    "sensing_lidar_top_ring_outlier_filter_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_top_ring_outlier_filter_callback_0",
+   "dag": "top_lidar",
+   "local_id": 4,
+   "file": "-sensing-lidar-top-ring_outlier_filter-callback_0.txt",
+   "seq_index": 80,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 100.0,
+   "root": "sensing_lidar_top_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 75,
+   "samples": 6600,
+   "median_ms": 16.249013,
+   "p99_ms": 35.32453,
+   "preds": [
+    "sensing_lidar_top_distortion_corrector_node_callback_2"
+   ],
+   "succs": [
+    "sensing_lidar_concatenate_data_callback_2"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_lidar_concatenate_data_callback_2",
+   "dag": "top_lidar",
+   "local_id": 5,
+   "file": "-sensing-lidar-concatenate_data-callback_2.txt",
+   "seq_index": 81,
+   "period_ms": null,
+   "deadline_ms": 100.0,
+   "min_deadline_ms": 100.0,
+   "root": "sensing_lidar_top_velodyne_driver_ros_wrapper_node_callback_0",
+   "rm": 70,
+   "dm": 75,
+   "samples": 6581,
+   "median_ms": 11.201358,
+   "p99_ms": 27.663349,
+   "preds": [
+    "sensing_lidar_top_ring_outlier_filter_callback_0"
+   ],
+   "succs": [],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "sensing_vehicle_velocity_converter_callback_0",
+   "dag": "vehicle",
+   "local_id": 0,
+   "file": "-sensing-vehicle_velocity_converter-callback_0.txt",
+   "seq_index": 82,
+   "period_ms": 33.0,
+   "deadline_ms": null,
+   "min_deadline_ms": 33.0,
+   "root": "sensing_vehicle_velocity_converter_callback_0",
+   "rm": 85,
+   "dm": 85,
+   "samples": 18488,
+   "median_ms": 0.098904,
+   "p99_ms": 0.308949,
+   "preds": [],
+   "succs": [
+    "localization_twist_estimator_gyro_odometer_callback_0"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "localization_twist_estimator_gyro_odometer_callback_0",
+   "dag": "vehicle",
+   "local_id": 1,
+   "file": "-localization-twist_estimator-gyro_odometer-callback_0.txt",
+   "seq_index": 83,
+   "period_ms": null,
+   "deadline_ms": null,
+   "min_deadline_ms": 33.0,
+   "root": "sensing_vehicle_velocity_converter_callback_0",
+   "rm": 85,
+   "dm": 85,
+   "samples": 18463,
+   "median_ms": 0.145549,
+   "p99_ms": 0.400371,
+   "preds": [
+    "sensing_vehicle_velocity_converter_callback_0"
+   ],
+   "succs": [
+    "vehicle_localization_pose_twist_fusion_filter_ekf_localizer_callback_3",
+    "vehicle_localization_pose_twist_fusion_filter_twist2accel_callback_1"
+   ],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "vehicle_localization_pose_twist_fusion_filter_ekf_localizer_callback_3",
+   "dag": "vehicle",
+   "local_id": 2,
+   "file": "-localization-pose_twist_fusion_filter-ekf_localizer-callback_3.txt",
+   "seq_index": 84,
+   "period_ms": null,
+   "deadline_ms": 33.0,
+   "min_deadline_ms": 33.0,
+   "root": "sensing_vehicle_velocity_converter_callback_0",
+   "rm": 85,
+   "dm": 85,
+   "samples": 18208,
+   "median_ms": 0.002046,
+   "p99_ms": 0.00567,
+   "preds": [
+    "localization_twist_estimator_gyro_odometer_callback_0"
+   ],
+   "succs": [],
+   "trigger": null,
+   "latest_inputs": []
+  },
+  {
+   "id": "vehicle_localization_pose_twist_fusion_filter_twist2accel_callback_1",
+   "dag": "vehicle",
+   "local_id": 3,
+   "file": "-localization-pose_twist_fusion_filter-twist2accel-callback_1.txt",
+   "seq_index": 85,
+   "period_ms": null,
+   "deadline_ms": 33.0,
+   "min_deadline_ms": 33.0,
+   "root": "sensing_vehicle_velocity_converter_callback_0",
+   "rm": 85,
+   "dm": 85,
+   "samples": 18171,
+   "median_ms": 0.00212,
+   "p99_ms": 0.004962,
+   "preds": [
+    "localization_twist_estimator_gyro_odometer_callback_0"
+   ],
+   "succs": [],
+   "trigger": null,
+   "latest_inputs": []
+  }
+ ],
+ "edges": [
+  [
+   "control_trajectory_follower_controller_node_exe_callback_1",
+   "control_autoware_shift_decider_callback_0"
+  ],
+  [
+   "control_trajectory_follower_controller_node_exe_callback_1",
+   "control_vehicle_cmd_gate_callback_16"
+  ],
+  [
+   "control_vehicle_cmd_gate_callback_16",
+   "raw_vehicle_cmd_converter_callback_2"
+  ],
+  [
+   "raw_vehicle_cmd_converter_callback_2",
+   "pacmod_interface_callback_04"
+  ],
+  [
+   "localization_pose_twist_fusion_filter_ekf_localizer_callback_1",
+   "localization_pose_estimator_ndt_scan_matcher_callback_1"
+  ],
+  [
+   "localization_pose_twist_fusion_filter_ekf_localizer_callback_1",
+   "localization_pose_twist_fusion_filter_stop_filter_callback_0"
+  ],
+  [
+   "localization_pose_twist_fusion_filter_stop_filter_callback_0",
+   "localization_pose_twist_fusion_filter_twist2accel_callback_0"
+  ],
+  [
+   "sensing_gnss_gnss_poser_callback_1",
+   "localization_util_pose_initializer_callback_0"
+  ],
+  [
+   "sensing_imu_imu_corrector_callback_0",
+   "localization_twist_estimator_gyro_odometer_callback_1"
+  ],
+  [
+   "localization_twist_estimator_gyro_odometer_callback_1",
+   "imu_localization_pose_twist_fusion_filter_ekf_localizer_callback_3"
+  ],
+  [
+   "localization_twist_estimator_gyro_odometer_callback_1",
+   "imu_localization_pose_twist_fusion_filter_twist2accel_callback_1"
+  ],
+  [
+   "sensing_lidar_left_velodyne_driver_ros_wrapper_node_callback_0",
+   "sensing_lidar_left_crop_box_filter_self_callback_0"
+  ],
+  [
+   "sensing_lidar_left_crop_box_filter_self_callback_0",
+   "sensing_lidar_left_crop_box_filter_mirror_callback_0"
+  ],
+  [
+   "sensing_lidar_left_crop_box_filter_mirror_callback_0",
+   "sensing_lidar_left_distortion_corrector_node_callback_2"
+  ],
+  [
+   "sensing_lidar_left_distortion_corrector_node_callback_2",
+   "sensing_lidar_left_ring_outlier_filter_callback_0"
+  ],
+  [
+   "sensing_lidar_left_ring_outlier_filter_callback_0",
+   "sensing_lidar_concatenate_data_callback_3"
+  ],
+  [
+   "sensing_lidar_concatenate_data_callback_1",
+   "perception_obstacle_segmentation_crop_box_filter_callback_0"
+  ],
+  [
+   "perception_obstacle_segmentation_crop_box_filter_callback_0",
+   "perception_obstacle_segmentation_common_ground_filter_callback_0"
+  ],
+  [
+   "sensing_lidar_concatenate_data_callback_1",
+   "perception_occupancy_grid_map_raw_pc_downsample_filter_callback_0"
+  ],
+  [
+   "sensing_lidar_concatenate_data_callback_1",
+   "perception_object_recognition_detection_pointpainting_pointpainting_callback_14"
+  ],
+  [
+   "sensing_lidar_concatenate_data_callback_1",
+   "localization_util_crop_box_filter_measurement_range_callback_0"
+  ],
+  [
+   "perception_obstacle_segmentation_common_ground_filter_callback_0",
+   "perception_occupancy_grid_map_obstacle_pc_downsample_filter_callback_0"
+  ],
+  [
+   "perception_obstacle_segmentation_common_ground_filter_callback_0",
+   "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1"
+  ],
+  [
+   "perception_occupancy_grid_map_raw_pc_downsample_filter_callback_0",
+   "perception_occupancy_grid_map_occupancy_grid_map_node_callback_0"
+  ],
+  [
+   "perception_occupancy_grid_map_obstacle_pc_downsample_filter_callback_0",
+   "perception_occupancy_grid_map_occupancy_grid_map_node_callback_0"
+  ],
+  [
+   "perception_occupancy_grid_map_occupancy_grid_map_node_callback_0",
+   "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1"
+  ],
+  [
+   "perception_object_recognition_detection_pointpainting_pointpainting_callback_14",
+   "perception_object_recognition_detection_roi_detected_object_fusion_callback_13"
+  ],
+  [
+   "localization_util_crop_box_filter_measurement_range_callback_0",
+   "localization_util_voxel_grid_downsample_filter_callback_0"
+  ],
+  [
+   "localization_util_voxel_grid_downsample_filter_callback_0",
+   "localization_util_random_downsample_filter_callback_0"
+  ],
+  [
+   "localization_util_random_downsample_filter_callback_0",
+   "localization_pose_estimator_ndt_scan_matcher_callback_2"
+  ],
+  [
+   "localization_pose_estimator_ndt_scan_matcher_callback_2",
+   "localization_pose_twist_fusion_filter_ekf_localizer_callback_2"
+  ],
+  [
+   "perception_object_recognition_detection_roi_detected_object_fusion_callback_13",
+   "perception_object_recognition_detection_obstacle_pointcloud_based_validator_node_callback_1"
+  ],
+  [
+   "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1",
+   "localization_util_voxel_grid_downsample_filter_callback_0"
+  ],
+  [
+   "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1",
+   "planning_scenario_planning_lane_driving_motion_planning_surround_obstacle_checker_callback_4"
+  ],
+  [
+   "planning_scenario_planning_lane_driving_motion_planning_surround_obstacle_checker_callback_4",
+   "planning_scenario_planning_external_velocity_limit_selector_callback_1"
+  ],
+  [
+   "localization_util_voxel_grid_downsample_filter_callback_0",
+   "perception_object_recognition_detection_voxel_based_compare_map_filter_callback_1"
+  ],
+  [
+   "perception_object_recognition_detection_voxel_based_compare_map_filter_callback_1",
+   "perception_object_recognition_detection_obstacle_pointcloud_based_validator_node_callback_1"
+  ],
+  [
+   "perception_object_recognition_detection_voxel_based_compare_map_filter_callback_1",
+   "perception_object_recognition_detection_clustering_roi_cluster_roi_pointcloud_fusion_callback_13"
+  ],
+  [
+   "perception_object_recognition_detection_voxel_based_compare_map_filter_callback_1",
+   "perception_object_recognition_detection_clustering_low_height_crop_box_filter_callback_0"
+  ],
+  [
+   "perception_object_recognition_detection_clustering_low_height_crop_box_filter_callback_0",
+   "perception_object_recognition_detection_clustering_euclidean_cluster_callback_0"
+  ],
+  [
+   "perception_object_recognition_detection_clustering_roi_cluster_roi_pointcloud_fusion_callback_13",
+   "perception_object_recognition_detection_clustering_cluster_merger_callback_0"
+  ],
+  [
+   "perception_object_recognition_detection_clustering_euclidean_cluster_callback_0",
+   "perception_object_recognition_detection_clustering_cluster_merger_callback_0"
+  ],
+  [
+   "perception_object_recognition_detection_clustering_cluster_merger_callback_0",
+   "perception_object_recognition_detection_clustering_shape_estimation_callback_0"
+  ],
+  [
+   "perception_object_recognition_detection_clustering_cluster_merger_callback_0",
+   "perception_object_recognition_detection_clustering_camera_lidar_fusion_roi_cluster_fusion_callback_13"
+  ],
+  [
+   "perception_object_recognition_detection_clustering_shape_estimation_callback_0",
+   "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_1"
+  ],
+  [
+   "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_1",
+   "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2698618723653090675_callback_0"
+  ],
+  [
+   "perception_object_recognition_detection_clustering_camera_lidar_fusion_roi_cluster_fusion_callback_13",
+   "perception_object_recognition_detection_clustering_camera_lidar_fusion_low_intensity_cluster_filter_node_callback_0"
+  ],
+  [
+   "perception_object_recognition_detection_clustering_camera_lidar_fusion_low_intensity_cluster_filter_node_callback_0",
+   "perception_object_recognition_detection_clustering_shape_estimation_callback_0"
+  ],
+  [
+   "perception_object_recognition_detection_clustering_shape_estimation_callback_0",
+   "perception_object_recognition_detection_clustering_camera_lidar_fusion_detected_object_feature_remover_callback_0"
+  ],
+  [
+   "perception_object_recognition_detection_clustering_camera_lidar_fusion_detected_object_feature_remover_callback_0",
+   "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2520929050865267140_callback_1"
+  ],
+  [
+   "perception_object_recognition_detection_obstacle_pointcloud_based_validator_node_callback_1",
+   "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2520929050865267140_callback_1"
+  ],
+  [
+   "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2520929050865267140_callback_1",
+   "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2698618723653090675_callback_0"
+  ],
+  [
+   "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2698618723653090675_callback_0",
+   "perception_object_recognition_detection_object_lanelet_filter_callback_0"
+  ],
+  [
+   "perception_object_recognition_detection_object_lanelet_filter_callback_0",
+   "perception_object_recognition_tracking_multi_object_tracker_callback_3"
+  ],
+  [
+   "perception_object_recognition_tracking_multi_object_tracker_callback_3",
+   "perception_object_recognition_tracking_decorative_tracker_merger_autoware_ecu_373458_2496151694788268076_callback_0"
+  ],
+  [
+   "perception_object_recognition_tracking_decorative_tracker_merger_autoware_ecu_373458_2496151694788268076_callback_0",
+   "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_0"
+  ],
+  [
+   "perception_object_recognition_tracking_decorative_tracker_merger_autoware_ecu_373458_2496151694788268076_callback_0",
+   "perception_object_recognition_prediction_map_based_prediction_callback_1"
+  ],
+  [
+   "planning_scenario_planning_lane_driving_behavior_planning_behavior_path_planner_callback_00",
+   "planning_scenario_planning_lane_driving_behavior_planning_behavior_velocity_planner_callback_13"
+  ],
+  [
+   "planning_scenario_planning_lane_driving_behavior_planning_behavior_velocity_planner_callback_13",
+   "planning_scenario_planning_lane_driving_motion_planning_elastic_band_smoother_callback_1"
+  ],
+  [
+   "planning_scenario_planning_lane_driving_motion_planning_elastic_band_smoother_callback_1",
+   "planning_scenario_planning_lane_driving_motion_planning_path_optimizer_callback_1"
+  ],
+  [
+   "planning_scenario_planning_lane_driving_motion_planning_path_optimizer_callback_1",
+   "planning_scenario_planning_lane_driving_motion_planning_motion_velocity_planner_callback_7"
+  ],
+  [
+   "planning_scenario_planning_lane_driving_motion_planning_motion_velocity_planner_callback_7",
+   "planning_scenario_planning_lane_driving_motion_planning_obstacle_cruise_planner_callback_3"
+  ],
+  [
+   "planning_scenario_planning_lane_driving_motion_planning_obstacle_cruise_planner_callback_3",
+   "planning_scenario_planning_scenario_selector_callback_1"
+  ],
+  [
+   "planning_scenario_planning_scenario_selector_callback_1",
+   "planning_scenario_planning_velocity_smoother_callback_4"
+  ],
+  [
+   "planning_scenario_planning_velocity_smoother_callback_4",
+   "planning_planning_validator_callback_2"
+  ],
+  [
+   "sensing_lidar_rear_velodyne_driver_ros_wrapper_node_callback_0",
+   "sensing_lidar_rear_crop_box_filter_self_callback_0"
+  ],
+  [
+   "sensing_lidar_rear_crop_box_filter_self_callback_0",
+   "sensing_lidar_rear_crop_box_filter_mirror_callback_0"
+  ],
+  [
+   "sensing_lidar_rear_crop_box_filter_mirror_callback_0",
+   "sensing_lidar_rear_distortion_corrector_node_callback_2"
+  ],
+  [
+   "sensing_lidar_rear_distortion_corrector_node_callback_2",
+   "sensing_lidar_rear_ring_outlier_filter_callback_0"
+  ],
+  [
+   "sensing_lidar_rear_ring_outlier_filter_callback_0",
+   "sensing_lidar_concatenate_data_callback_5"
+  ],
+  [
+   "sensing_lidar_right_velodyne_driver_ros_wrapper_node_callback_0",
+   "sensing_lidar_right_crop_box_filter_self_callback_0"
+  ],
+  [
+   "sensing_lidar_right_crop_box_filter_self_callback_0",
+   "sensing_lidar_right_crop_box_filter_mirror_callback_0"
+  ],
+  [
+   "sensing_lidar_right_crop_box_filter_mirror_callback_0",
+   "sensing_lidar_right_distortion_corrector_node_callback_2"
+  ],
+  [
+   "sensing_lidar_right_distortion_corrector_node_callback_2",
+   "sensing_lidar_right_ring_outlier_filter_callback_0"
+  ],
+  [
+   "sensing_lidar_right_ring_outlier_filter_callback_0",
+   "sensing_lidar_concatenate_data_callback_4"
+  ],
+  [
+   "sensing_lidar_top_velodyne_driver_ros_wrapper_node_callback_0",
+   "sensing_lidar_top_crop_box_filter_self_callback_0"
+  ],
+  [
+   "sensing_lidar_top_crop_box_filter_self_callback_0",
+   "sensing_lidar_top_crop_box_filter_mirror_callback_0"
+  ],
+  [
+   "sensing_lidar_top_crop_box_filter_mirror_callback_0",
+   "sensing_lidar_top_distortion_corrector_node_callback_2"
+  ],
+  [
+   "sensing_lidar_top_distortion_corrector_node_callback_2",
+   "sensing_lidar_top_ring_outlier_filter_callback_0"
+  ],
+  [
+   "sensing_lidar_top_ring_outlier_filter_callback_0",
+   "sensing_lidar_concatenate_data_callback_2"
+  ],
+  [
+   "sensing_vehicle_velocity_converter_callback_0",
+   "localization_twist_estimator_gyro_odometer_callback_0"
+  ],
+  [
+   "localization_twist_estimator_gyro_odometer_callback_0",
+   "vehicle_localization_pose_twist_fusion_filter_ekf_localizer_callback_3"
+  ],
+  [
+   "localization_twist_estimator_gyro_odometer_callback_0",
+   "vehicle_localization_pose_twist_fusion_filter_twist2accel_callback_1"
+  ]
+ ],
+ "latest_read": [
+  {
+   "slot": 0,
+   "sources": [
+    "sensing_lidar_concatenate_data_callback_3",
+    "sensing_lidar_concatenate_data_callback_5",
+    "sensing_lidar_concatenate_data_callback_4",
+    "sensing_lidar_concatenate_data_callback_2"
+   ],
+   "target": "sensing_lidar_concatenate_data_callback_1",
+   "note": "the side and top LiDAR concatenate_data sinks to perception's root"
+  },
+  {
+   "slot": 1,
+   "sources": [
+    "perception_object_recognition_prediction_map_based_prediction_callback_1"
+   ],
+   "target": "planning_scenario_planning_lane_driving_behavior_planning_behavior_path_planner_callback_00",
+   "note": "perception's prediction sink to planning's root"
+  },
+  {
+   "slot": 2,
+   "sources": [
+    "planning_planning_validator_callback_2"
+   ],
+   "target": "control_trajectory_follower_controller_node_exe_callback_1",
+   "note": "planning's sink to control's root"
+  },
+  {
+   "slot": 3,
+   "sources": [
+    "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1"
+   ],
+   "target": "localization_util_voxel_grid_downsample_filter_callback_0",
+   "note": "designated trigger cut"
+  },
+  {
+   "slot": 4,
+   "sources": [
+    "perception_occupancy_grid_map_obstacle_pc_downsample_filter_callback_0"
+   ],
+   "target": "perception_occupancy_grid_map_occupancy_grid_map_node_callback_0",
+   "note": "designated trigger cut"
+  },
+  {
+   "slot": 5,
+   "sources": [
+    "perception_object_recognition_detection_voxel_based_compare_map_filter_callback_1"
+   ],
+   "target": "perception_object_recognition_detection_obstacle_pointcloud_based_validator_node_callback_1",
+   "note": "designated trigger cut"
+  },
+  {
+   "slot": 6,
+   "sources": [
+    "perception_obstacle_segmentation_common_ground_filter_callback_0"
+   ],
+   "target": "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1",
+   "note": "designated trigger cut"
+  },
+  {
+   "slot": 7,
+   "sources": [
+    "perception_object_recognition_detection_clustering_camera_lidar_fusion_detected_object_feature_remover_callback_0"
+   ],
+   "target": "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2520929050865267140_callback_1",
+   "note": "designated trigger cut"
+  },
+  {
+   "slot": 8,
+   "sources": [
+    "perception_object_recognition_detection_clustering_camera_lidar_fusion_low_intensity_cluster_filter_node_callback_0"
+   ],
+   "target": "perception_object_recognition_detection_clustering_shape_estimation_callback_0",
+   "note": "designated trigger cut"
+  },
+  {
+   "slot": 9,
+   "sources": [
+    "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_1"
+   ],
+   "target": "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2698618723653090675_callback_0",
+   "note": "designated trigger cut"
+  },
+  {
+   "slot": 10,
+   "sources": [
+    "perception_object_recognition_detection_clustering_euclidean_cluster_callback_0"
+   ],
+   "target": "perception_object_recognition_detection_clustering_cluster_merger_callback_0",
+   "note": "designated trigger cut"
+  }
+ ],
+ "cut_edges": [
+  {
+   "slot": 3,
+   "dag": "perception",
+   "source": "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1",
+   "target": "localization_util_voxel_grid_downsample_filter_callback_0"
+  },
+  {
+   "slot": 4,
+   "dag": "perception",
+   "source": "perception_occupancy_grid_map_obstacle_pc_downsample_filter_callback_0",
+   "target": "perception_occupancy_grid_map_occupancy_grid_map_node_callback_0"
+  },
+  {
+   "slot": 5,
+   "dag": "perception",
+   "source": "perception_object_recognition_detection_voxel_based_compare_map_filter_callback_1",
+   "target": "perception_object_recognition_detection_obstacle_pointcloud_based_validator_node_callback_1"
+  },
+  {
+   "slot": 6,
+   "dag": "perception",
+   "source": "perception_obstacle_segmentation_common_ground_filter_callback_0",
+   "target": "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1"
+  },
+  {
+   "slot": 7,
+   "dag": "perception",
+   "source": "perception_object_recognition_detection_clustering_camera_lidar_fusion_detected_object_feature_remover_callback_0",
+   "target": "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2520929050865267140_callback_1"
+  },
+  {
+   "slot": 8,
+   "dag": "perception",
+   "source": "perception_object_recognition_detection_clustering_camera_lidar_fusion_low_intensity_cluster_filter_node_callback_0",
+   "target": "perception_object_recognition_detection_clustering_shape_estimation_callback_0"
+  },
+  {
+   "slot": 9,
+   "dag": "perception",
+   "source": "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_1",
+   "target": "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2698618723653090675_callback_0"
+  },
+  {
+   "slot": 10,
+   "dag": "perception",
+   "source": "perception_object_recognition_detection_clustering_euclidean_cluster_callback_0",
+   "target": "perception_object_recognition_detection_clustering_cluster_merger_callback_0"
+  }
+ ],
+ "e2e": {
+  "sources": [
+   "sensing_lidar_left_velodyne_driver_ros_wrapper_node_callback_0",
+   "sensing_lidar_rear_velodyne_driver_ros_wrapper_node_callback_0",
+   "sensing_lidar_right_velodyne_driver_ros_wrapper_node_callback_0",
+   "sensing_lidar_top_velodyne_driver_ros_wrapper_node_callback_0"
+  ],
+  "sink": "pacmod_interface_callback_04",
+  "note": "the longest control chain; carried over the three latest-read slots, reported without a deadline clause (plan \u00a70)"
+ },
+ "chains": [
+  {
+   "index": 0,
+   "id": "control_autoware_shift_decider_callback_0",
+   "dag": "control",
+   "root": "control_trajectory_follower_controller_node_exe_callback_1",
+   "sink": "control_autoware_shift_decider_callback_0",
+   "deadline_ms": 30.0,
+   "path": [
+    "control_trajectory_follower_controller_node_exe_callback_1",
+    "control_autoware_shift_decider_callback_0"
+   ],
+   "path_median_ms": 2.8279
+  },
+  {
+   "index": 1,
+   "id": "pacmod_interface_callback_04",
+   "dag": "control",
+   "root": "control_trajectory_follower_controller_node_exe_callback_1",
+   "sink": "pacmod_interface_callback_04",
+   "deadline_ms": 30.0,
+   "path": [
+    "control_trajectory_follower_controller_node_exe_callback_1",
+    "control_vehicle_cmd_gate_callback_16",
+    "raw_vehicle_cmd_converter_callback_2",
+    "pacmod_interface_callback_04"
+   ],
+   "path_median_ms": 2.8539
+  },
+  {
+   "index": 2,
+   "id": "localization_pose_estimator_ndt_scan_matcher_callback_1",
+   "dag": "ekf_localizer",
+   "root": "localization_pose_twist_fusion_filter_ekf_localizer_callback_1",
+   "sink": "localization_pose_estimator_ndt_scan_matcher_callback_1",
+   "deadline_ms": 20.0,
+   "path": [
+    "localization_pose_twist_fusion_filter_ekf_localizer_callback_1",
+    "localization_pose_estimator_ndt_scan_matcher_callback_1"
+   ],
+   "path_median_ms": 1.4971
+  },
+  {
+   "index": 3,
+   "id": "localization_pose_twist_fusion_filter_twist2accel_callback_0",
+   "dag": "ekf_localizer",
+   "root": "localization_pose_twist_fusion_filter_ekf_localizer_callback_1",
+   "sink": "localization_pose_twist_fusion_filter_twist2accel_callback_0",
+   "deadline_ms": 20.0,
+   "path": [
+    "localization_pose_twist_fusion_filter_ekf_localizer_callback_1",
+    "localization_pose_twist_fusion_filter_stop_filter_callback_0",
+    "localization_pose_twist_fusion_filter_twist2accel_callback_0"
+   ],
+   "path_median_ms": 1.7362
+  },
+  {
+   "index": 4,
+   "id": "localization_util_pose_initializer_callback_0",
+   "dag": "gnss",
+   "root": "sensing_gnss_gnss_poser_callback_1",
+   "sink": "localization_util_pose_initializer_callback_0",
+   "deadline_ms": 1000.0,
+   "path": [
+    "sensing_gnss_gnss_poser_callback_1",
+    "localization_util_pose_initializer_callback_0"
+   ],
+   "path_median_ms": 0.5284
+  },
+  {
+   "index": 5,
+   "id": "imu_localization_pose_twist_fusion_filter_ekf_localizer_callback_3",
+   "dag": "imu",
+   "root": "sensing_imu_imu_corrector_callback_0",
+   "sink": "imu_localization_pose_twist_fusion_filter_ekf_localizer_callback_3",
+   "deadline_ms": 33.0,
+   "path": [
+    "sensing_imu_imu_corrector_callback_0",
+    "localization_twist_estimator_gyro_odometer_callback_1",
+    "imu_localization_pose_twist_fusion_filter_ekf_localizer_callback_3"
+   ],
+   "path_median_ms": 0.282
+  },
+  {
+   "index": 6,
+   "id": "imu_localization_pose_twist_fusion_filter_twist2accel_callback_1",
+   "dag": "imu",
+   "root": "sensing_imu_imu_corrector_callback_0",
+   "sink": "imu_localization_pose_twist_fusion_filter_twist2accel_callback_1",
+   "deadline_ms": 33.0,
+   "path": [
+    "sensing_imu_imu_corrector_callback_0",
+    "localization_twist_estimator_gyro_odometer_callback_1",
+    "imu_localization_pose_twist_fusion_filter_twist2accel_callback_1"
+   ],
+   "path_median_ms": 0.2821
+  },
+  {
+   "index": 7,
+   "id": "sensing_lidar_concatenate_data_callback_3",
+   "dag": "left_lidar",
+   "root": "sensing_lidar_left_velodyne_driver_ros_wrapper_node_callback_0",
+   "sink": "sensing_lidar_concatenate_data_callback_3",
+   "deadline_ms": 50.0,
+   "path": [
+    "sensing_lidar_left_velodyne_driver_ros_wrapper_node_callback_0",
+    "sensing_lidar_left_crop_box_filter_self_callback_0",
+    "sensing_lidar_left_crop_box_filter_mirror_callback_0",
+    "sensing_lidar_left_distortion_corrector_node_callback_2",
+    "sensing_lidar_left_ring_outlier_filter_callback_0",
+    "sensing_lidar_concatenate_data_callback_3"
+   ],
+   "path_median_ms": 2.2923
+  },
+  {
+   "index": 8,
+   "id": "localization_pose_twist_fusion_filter_ekf_localizer_callback_2",
+   "dag": "perception",
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "sink": "localization_pose_twist_fusion_filter_ekf_localizer_callback_2",
+   "deadline_ms": 300.0,
+   "path": [
+    "sensing_lidar_concatenate_data_callback_1",
+    "perception_obstacle_segmentation_crop_box_filter_callback_0",
+    "perception_obstacle_segmentation_common_ground_filter_callback_0",
+    "perception_occupancy_grid_map_obstacle_pc_downsample_filter_callback_0",
+    "perception_occupancy_grid_map_occupancy_grid_map_node_callback_0",
+    "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1",
+    "localization_util_voxel_grid_downsample_filter_callback_0",
+    "localization_util_random_downsample_filter_callback_0",
+    "localization_pose_estimator_ndt_scan_matcher_callback_2",
+    "localization_pose_twist_fusion_filter_ekf_localizer_callback_2"
+   ],
+   "path_median_ms": 105.8805
+  },
+  {
+   "index": 9,
+   "id": "perception_object_recognition_prediction_map_based_prediction_callback_1",
+   "dag": "perception",
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "sink": "perception_object_recognition_prediction_map_based_prediction_callback_1",
+   "deadline_ms": 300.0,
+   "path": [
+    "sensing_lidar_concatenate_data_callback_1",
+    "perception_obstacle_segmentation_crop_box_filter_callback_0",
+    "perception_obstacle_segmentation_common_ground_filter_callback_0",
+    "perception_occupancy_grid_map_obstacle_pc_downsample_filter_callback_0",
+    "perception_occupancy_grid_map_occupancy_grid_map_node_callback_0",
+    "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1",
+    "localization_util_voxel_grid_downsample_filter_callback_0",
+    "perception_object_recognition_detection_voxel_based_compare_map_filter_callback_1",
+    "perception_object_recognition_detection_clustering_low_height_crop_box_filter_callback_0",
+    "perception_object_recognition_detection_clustering_euclidean_cluster_callback_0",
+    "perception_object_recognition_detection_clustering_cluster_merger_callback_0",
+    "perception_object_recognition_detection_clustering_camera_lidar_fusion_roi_cluster_fusion_callback_13",
+    "perception_object_recognition_detection_clustering_camera_lidar_fusion_low_intensity_cluster_filter_node_callback_0",
+    "perception_object_recognition_detection_clustering_shape_estimation_callback_0",
+    "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_1",
+    "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2698618723653090675_callback_0",
+    "perception_object_recognition_detection_object_lanelet_filter_callback_0",
+    "perception_object_recognition_tracking_multi_object_tracker_callback_3",
+    "perception_object_recognition_tracking_decorative_tracker_merger_autoware_ecu_373458_2496151694788268076_callback_0",
+    "perception_object_recognition_prediction_map_based_prediction_callback_1"
+   ],
+   "path_median_ms": 176.9179
+  },
+  {
+   "index": 10,
+   "id": "planning_scenario_planning_external_velocity_limit_selector_callback_1",
+   "dag": "perception",
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "sink": "planning_scenario_planning_external_velocity_limit_selector_callback_1",
+   "deadline_ms": 300.0,
+   "path": [
+    "sensing_lidar_concatenate_data_callback_1",
+    "perception_obstacle_segmentation_crop_box_filter_callback_0",
+    "perception_obstacle_segmentation_common_ground_filter_callback_0",
+    "perception_occupancy_grid_map_obstacle_pc_downsample_filter_callback_0",
+    "perception_occupancy_grid_map_occupancy_grid_map_node_callback_0",
+    "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1",
+    "planning_scenario_planning_lane_driving_motion_planning_surround_obstacle_checker_callback_4",
+    "planning_scenario_planning_external_velocity_limit_selector_callback_1"
+   ],
+   "path_median_ms": 82.5683
+  },
+  {
+   "index": 11,
+   "id": "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_0",
+   "dag": "perception",
+   "root": "sensing_lidar_concatenate_data_callback_1",
+   "sink": "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_0",
+   "deadline_ms": 300.0,
+   "path": [
+    "sensing_lidar_concatenate_data_callback_1",
+    "perception_obstacle_segmentation_crop_box_filter_callback_0",
+    "perception_obstacle_segmentation_common_ground_filter_callback_0",
+    "perception_occupancy_grid_map_obstacle_pc_downsample_filter_callback_0",
+    "perception_occupancy_grid_map_occupancy_grid_map_node_callback_0",
+    "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1",
+    "localization_util_voxel_grid_downsample_filter_callback_0",
+    "perception_object_recognition_detection_voxel_based_compare_map_filter_callback_1",
+    "perception_object_recognition_detection_clustering_low_height_crop_box_filter_callback_0",
+    "perception_object_recognition_detection_clustering_euclidean_cluster_callback_0",
+    "perception_object_recognition_detection_clustering_cluster_merger_callback_0",
+    "perception_object_recognition_detection_clustering_camera_lidar_fusion_roi_cluster_fusion_callback_13",
+    "perception_object_recognition_detection_clustering_camera_lidar_fusion_low_intensity_cluster_filter_node_callback_0",
+    "perception_object_recognition_detection_clustering_shape_estimation_callback_0",
+    "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_1",
+    "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2698618723653090675_callback_0",
+    "perception_object_recognition_detection_object_lanelet_filter_callback_0",
+    "perception_object_recognition_tracking_multi_object_tracker_callback_3",
+    "perception_object_recognition_tracking_decorative_tracker_merger_autoware_ecu_373458_2496151694788268076_callback_0",
+    "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_0"
+   ],
+   "path_median_ms": 157.6521
+  },
+  {
+   "index": 12,
+   "id": "planning_planning_validator_callback_2",
+   "dag": "planning",
+   "root": "planning_scenario_planning_lane_driving_behavior_planning_behavior_path_planner_callback_00",
+   "sink": "planning_planning_validator_callback_2",
+   "deadline_ms": 300.0,
+   "path": [
+    "planning_scenario_planning_lane_driving_behavior_planning_behavior_path_planner_callback_00",
+    "planning_scenario_planning_lane_driving_behavior_planning_behavior_velocity_planner_callback_13",
+    "planning_scenario_planning_lane_driving_motion_planning_elastic_band_smoother_callback_1",
+    "planning_scenario_planning_lane_driving_motion_planning_path_optimizer_callback_1",
+    "planning_scenario_planning_lane_driving_motion_planning_motion_velocity_planner_callback_7",
+    "planning_scenario_planning_lane_driving_motion_planning_obstacle_cruise_planner_callback_3",
+    "planning_scenario_planning_scenario_selector_callback_1",
+    "planning_scenario_planning_velocity_smoother_callback_4",
+    "planning_planning_validator_callback_2"
+   ],
+   "path_median_ms": 107.1053
+  },
+  {
+   "index": 13,
+   "id": "sensing_lidar_concatenate_data_callback_5",
+   "dag": "rear_lidar",
+   "root": "sensing_lidar_rear_velodyne_driver_ros_wrapper_node_callback_0",
+   "sink": "sensing_lidar_concatenate_data_callback_5",
+   "deadline_ms": 50.0,
+   "path": [
+    "sensing_lidar_rear_velodyne_driver_ros_wrapper_node_callback_0",
+    "sensing_lidar_rear_crop_box_filter_self_callback_0",
+    "sensing_lidar_rear_crop_box_filter_mirror_callback_0",
+    "sensing_lidar_rear_distortion_corrector_node_callback_2",
+    "sensing_lidar_rear_ring_outlier_filter_callback_0",
+    "sensing_lidar_concatenate_data_callback_5"
+   ],
+   "path_median_ms": 0.6209
+  },
+  {
+   "index": 14,
+   "id": "sensing_lidar_concatenate_data_callback_4",
+   "dag": "right_lidar",
+   "root": "sensing_lidar_right_velodyne_driver_ros_wrapper_node_callback_0",
+   "sink": "sensing_lidar_concatenate_data_callback_4",
+   "deadline_ms": 50.0,
+   "path": [
+    "sensing_lidar_right_velodyne_driver_ros_wrapper_node_callback_0",
+    "sensing_lidar_right_crop_box_filter_self_callback_0",
+    "sensing_lidar_right_crop_box_filter_mirror_callback_0",
+    "sensing_lidar_right_distortion_corrector_node_callback_2",
+    "sensing_lidar_right_ring_outlier_filter_callback_0",
+    "sensing_lidar_concatenate_data_callback_4"
+   ],
+   "path_median_ms": 2.3475
+  },
+  {
+   "index": 15,
+   "id": "sensing_lidar_concatenate_data_callback_2",
+   "dag": "top_lidar",
+   "root": "sensing_lidar_top_velodyne_driver_ros_wrapper_node_callback_0",
+   "sink": "sensing_lidar_concatenate_data_callback_2",
+   "deadline_ms": 100.0,
+   "path": [
+    "sensing_lidar_top_velodyne_driver_ros_wrapper_node_callback_0",
+    "sensing_lidar_top_crop_box_filter_self_callback_0",
+    "sensing_lidar_top_crop_box_filter_mirror_callback_0",
+    "sensing_lidar_top_distortion_corrector_node_callback_2",
+    "sensing_lidar_top_ring_outlier_filter_callback_0",
+    "sensing_lidar_concatenate_data_callback_2"
+   ],
+   "path_median_ms": 74.3534
+  },
+  {
+   "index": 16,
+   "id": "vehicle_localization_pose_twist_fusion_filter_ekf_localizer_callback_3",
+   "dag": "vehicle",
+   "root": "sensing_vehicle_velocity_converter_callback_0",
+   "sink": "vehicle_localization_pose_twist_fusion_filter_ekf_localizer_callback_3",
+   "deadline_ms": 33.0,
+   "path": [
+    "sensing_vehicle_velocity_converter_callback_0",
+    "localization_twist_estimator_gyro_odometer_callback_0",
+    "vehicle_localization_pose_twist_fusion_filter_ekf_localizer_callback_3"
+   ],
+   "path_median_ms": 0.2465
+  },
+  {
+   "index": 17,
+   "id": "vehicle_localization_pose_twist_fusion_filter_twist2accel_callback_1",
+   "dag": "vehicle",
+   "root": "sensing_vehicle_velocity_converter_callback_0",
+   "sink": "vehicle_localization_pose_twist_fusion_filter_twist2accel_callback_1",
+   "deadline_ms": 33.0,
+   "path": [
+    "sensing_vehicle_velocity_converter_callback_0",
+    "localization_twist_estimator_gyro_odometer_callback_0",
+    "vehicle_localization_pose_twist_fusion_filter_twist2accel_callback_1"
+   ],
+   "path_median_ms": 0.2466
+  }
+ ],
+ "regions": [
+  {
+   "index": 0,
+   "id": "control_region",
+   "kind": "root",
+   "dag": "control",
+   "pool": "r2",
+   "period_ms": 30.0,
+   "input": null,
+   "c_median_ms": 2.9207,
+   "c_p99_ms": 9.8952,
+   "u_median_alpha": 0.067176,
+   "callbacks": [
+    "control_trajectory_follower_controller_node_exe_callback_1",
+    "control_autoware_shift_decider_callback_0",
+    "control_vehicle_cmd_gate_callback_16",
+    "raw_vehicle_cmd_converter_callback_2",
+    "pacmod_interface_callback_04"
+   ]
+  },
+  {
+   "index": 1,
+   "id": "ekf_localizer_region",
+   "kind": "root",
+   "dag": "ekf_localizer",
+   "pool": "r2",
+   "period_ms": 20.0,
+   "input": null,
+   "c_median_ms": 1.8352,
+   "c_p99_ms": 8.9013,
+   "u_median_alpha": 0.063314,
+   "callbacks": [
+    "localization_pose_twist_fusion_filter_ekf_localizer_callback_1",
+    "localization_pose_estimator_ndt_scan_matcher_callback_1",
+    "localization_pose_twist_fusion_filter_stop_filter_callback_0",
+    "localization_pose_twist_fusion_filter_twist2accel_callback_0"
+   ]
+  },
+  {
+   "index": 2,
+   "id": "gnss_region",
+   "kind": "root",
+   "dag": "gnss",
+   "pool": "r0",
+   "period_ms": 1000.0,
+   "input": null,
+   "c_median_ms": 0.5284,
+   "c_p99_ms": 3.3687,
+   "u_median_alpha": 0.000365,
+   "callbacks": [
+    "sensing_gnss_gnss_poser_callback_1",
+    "localization_util_pose_initializer_callback_0"
+   ]
+  },
+  {
+   "index": 3,
+   "id": "imu_region",
+   "kind": "root",
+   "dag": "imu",
+   "pool": "r0",
+   "period_ms": 33.0,
+   "input": null,
+   "c_median_ms": 0.2841,
+   "c_p99_ms": 0.7553,
+   "u_median_alpha": 0.00594,
+   "callbacks": [
+    "sensing_imu_imu_corrector_callback_0",
+    "localization_twist_estimator_gyro_odometer_callback_1",
+    "imu_localization_pose_twist_fusion_filter_ekf_localizer_callback_3",
+    "imu_localization_pose_twist_fusion_filter_twist2accel_callback_1"
+   ]
+  },
+  {
+   "index": 4,
+   "id": "left_lidar_region",
+   "kind": "root",
+   "dag": "left_lidar",
+   "pool": "r1",
+   "period_ms": 100.0,
+   "input": null,
+   "c_median_ms": 2.2923,
+   "c_p99_ms": 30.4345,
+   "u_median_alpha": 0.015817,
+   "callbacks": [
+    "sensing_lidar_left_velodyne_driver_ros_wrapper_node_callback_0",
+    "sensing_lidar_left_crop_box_filter_self_callback_0",
+    "sensing_lidar_left_crop_box_filter_mirror_callback_0",
+    "sensing_lidar_left_distortion_corrector_node_callback_2",
+    "sensing_lidar_left_ring_outlier_filter_callback_0",
+    "sensing_lidar_concatenate_data_callback_3"
+   ]
+  },
+  {
+   "index": 5,
+   "id": "perception_region",
+   "kind": "root",
+   "dag": "perception",
+   "pool": "r3",
+   "period_ms": 100.0,
+   "input": null,
+   "c_median_ms": 7.6905,
+   "c_p99_ms": 31.9513,
+   "u_median_alpha": 0.053064,
+   "callbacks": [
+    "sensing_lidar_concatenate_data_callback_1"
+   ]
+  },
+  {
+   "index": 6,
+   "id": "perception_cont0_region",
+   "kind": "continuation",
+   "dag": "perception",
+   "pool": "r2",
+   "period_ms": 100.0,
+   "input": "perception_region",
+   "c_median_ms": 33.2227,
+   "c_p99_ms": 86.4749,
+   "u_median_alpha": 0.229237,
+   "callbacks": [
+    "perception_obstacle_segmentation_crop_box_filter_callback_0",
+    "perception_obstacle_segmentation_common_ground_filter_callback_0",
+    "perception_occupancy_grid_map_obstacle_pc_downsample_filter_callback_0"
+   ]
+  },
+  {
+   "index": 7,
+   "id": "perception_cont1_region",
+   "kind": "continuation",
+   "dag": "perception",
+   "pool": "r2",
+   "period_ms": 100.0,
+   "input": "perception_region",
+   "c_median_ms": 53.9579,
+   "c_p99_ms": 143.6885,
+   "u_median_alpha": 0.37231,
+   "callbacks": [
+    "perception_occupancy_grid_map_raw_pc_downsample_filter_callback_0",
+    "perception_occupancy_grid_map_occupancy_grid_map_node_callback_0",
+    "perception_obstacle_segmentation_occupancy_grid_based_outlier_filter_callback_1",
+    "planning_scenario_planning_lane_driving_motion_planning_surround_obstacle_checker_callback_4",
+    "planning_scenario_planning_external_velocity_limit_selector_callback_1"
+   ]
+  },
+  {
+   "index": 8,
+   "id": "perception_cont2_region",
+   "kind": "continuation",
+   "dag": "perception",
+   "pool": "r3",
+   "period_ms": 100.0,
+   "input": "perception_region",
+   "c_median_ms": 51.1398,
+   "c_p99_ms": 319.1227,
+   "u_median_alpha": 0.352865,
+   "callbacks": [
+    "perception_object_recognition_detection_pointpainting_pointpainting_callback_14",
+    "perception_object_recognition_detection_roi_detected_object_fusion_callback_13",
+    "perception_object_recognition_detection_obstacle_pointcloud_based_validator_node_callback_1",
+    "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2520929050865267140_callback_1",
+    "perception_object_recognition_detection_object_association_merger_autoware_ecu_373458_2698618723653090675_callback_0",
+    "perception_object_recognition_detection_object_lanelet_filter_callback_0",
+    "perception_object_recognition_tracking_multi_object_tracker_callback_3",
+    "perception_object_recognition_tracking_decorative_tracker_merger_autoware_ecu_373458_2496151694788268076_callback_0",
+    "perception_object_recognition_prediction_map_based_prediction_callback_1",
+    "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_0"
+   ]
+  },
+  {
+   "index": 9,
+   "id": "perception_cont3_region",
+   "kind": "continuation",
+   "dag": "perception",
+   "pool": "r1",
+   "period_ms": 100.0,
+   "input": "perception_region",
+   "c_median_ms": 83.1401,
+   "c_p99_ms": 248.4039,
+   "u_median_alpha": 0.573667,
+   "callbacks": [
+    "localization_util_crop_box_filter_measurement_range_callback_0",
+    "localization_util_voxel_grid_downsample_filter_callback_0",
+    "perception_object_recognition_detection_voxel_based_compare_map_filter_callback_1",
+    "localization_util_random_downsample_filter_callback_0",
+    "localization_pose_estimator_ndt_scan_matcher_callback_2",
+    "localization_pose_twist_fusion_filter_ekf_localizer_callback_2",
+    "perception_object_recognition_detection_clustering_low_height_crop_box_filter_callback_0",
+    "perception_object_recognition_detection_clustering_euclidean_cluster_callback_0",
+    "perception_object_recognition_detection_clustering_roi_cluster_roi_pointcloud_fusion_callback_13",
+    "perception_object_recognition_detection_clustering_cluster_merger_callback_0",
+    "perception_object_recognition_detection_clustering_camera_lidar_fusion_roi_cluster_fusion_callback_13",
+    "perception_object_recognition_detection_clustering_camera_lidar_fusion_low_intensity_cluster_filter_node_callback_0",
+    "perception_object_recognition_detection_clustering_shape_estimation_callback_0",
+    "perception_object_recognition_detection_detection_by_tracker_detection_by_tracker_node_callback_1",
+    "perception_object_recognition_detection_clustering_camera_lidar_fusion_detected_object_feature_remover_callback_0"
+   ]
+  },
+  {
+   "index": 10,
+   "id": "planning_region",
+   "kind": "root",
+   "dag": "planning",
+   "pool": "r0",
+   "period_ms": 100.0,
+   "input": null,
+   "c_median_ms": 0.0317,
+   "c_p99_ms": 0.1698,
+   "u_median_alpha": 0.000219,
+   "callbacks": [
+    "planning_scenario_planning_lane_driving_behavior_planning_behavior_path_planner_callback_00"
+   ]
+  },
+  {
+   "index": 11,
+   "id": "planning_cont0_region",
+   "kind": "continuation",
+   "dag": "planning",
+   "pool": "r0",
+   "period_ms": 100.0,
+   "input": "planning_region",
+   "c_median_ms": 107.0736,
+   "c_p99_ms": 337.9139,
+   "u_median_alpha": 0.738808,
+   "callbacks": [
+    "planning_scenario_planning_lane_driving_behavior_planning_behavior_velocity_planner_callback_13",
+    "planning_scenario_planning_lane_driving_motion_planning_elastic_band_smoother_callback_1",
+    "planning_scenario_planning_lane_driving_motion_planning_path_optimizer_callback_1",
+    "planning_scenario_planning_lane_driving_motion_planning_motion_velocity_planner_callback_7",
+    "planning_scenario_planning_lane_driving_motion_planning_obstacle_cruise_planner_callback_3",
+    "planning_scenario_planning_scenario_selector_callback_1",
+    "planning_scenario_planning_velocity_smoother_callback_4",
+    "planning_planning_validator_callback_2"
+   ]
+  },
+  {
+   "index": 12,
+   "id": "rear_lidar_region",
+   "kind": "root",
+   "dag": "rear_lidar",
+   "pool": "r2",
+   "period_ms": 100.0,
+   "input": null,
+   "c_median_ms": 0.6209,
+   "c_p99_ms": 21.4748,
+   "u_median_alpha": 0.004284,
+   "callbacks": [
+    "sensing_lidar_rear_velodyne_driver_ros_wrapper_node_callback_0",
+    "sensing_lidar_rear_crop_box_filter_self_callback_0",
+    "sensing_lidar_rear_crop_box_filter_mirror_callback_0",
+    "sensing_lidar_rear_distortion_corrector_node_callback_2",
+    "sensing_lidar_rear_ring_outlier_filter_callback_0",
+    "sensing_lidar_concatenate_data_callback_5"
+   ]
+  },
+  {
+   "index": 13,
+   "id": "right_lidar_region",
+   "kind": "root",
+   "dag": "right_lidar",
+   "pool": "r2",
+   "period_ms": 100.0,
+   "input": null,
+   "c_median_ms": 2.3475,
+   "c_p99_ms": 35.7338,
+   "u_median_alpha": 0.016198,
+   "callbacks": [
+    "sensing_lidar_right_velodyne_driver_ros_wrapper_node_callback_0",
+    "sensing_lidar_right_crop_box_filter_self_callback_0",
+    "sensing_lidar_right_crop_box_filter_mirror_callback_0",
+    "sensing_lidar_right_distortion_corrector_node_callback_2",
+    "sensing_lidar_right_ring_outlier_filter_callback_0",
+    "sensing_lidar_concatenate_data_callback_4"
+   ]
+  },
+  {
+   "index": 14,
+   "id": "top_lidar_region",
+   "kind": "root",
+   "dag": "top_lidar",
+   "pool": "r1",
+   "period_ms": 100.0,
+   "input": null,
+   "c_median_ms": 23.8707,
+   "c_p99_ms": 54.5363,
+   "u_median_alpha": 0.164708,
+   "callbacks": [
+    "sensing_lidar_top_velodyne_driver_ros_wrapper_node_callback_0"
+   ]
+  },
+  {
+   "index": 15,
+   "id": "top_lidar_cont0_region",
+   "kind": "continuation",
+   "dag": "top_lidar",
+   "pool": "r3",
+   "period_ms": 100.0,
+   "input": "top_lidar_region",
+   "c_median_ms": 50.4827,
+   "c_p99_ms": 143.2642,
+   "u_median_alpha": 0.348331,
+   "callbacks": [
+    "sensing_lidar_top_crop_box_filter_self_callback_0",
+    "sensing_lidar_top_crop_box_filter_mirror_callback_0",
+    "sensing_lidar_top_distortion_corrector_node_callback_2",
+    "sensing_lidar_top_ring_outlier_filter_callback_0",
+    "sensing_lidar_concatenate_data_callback_2"
+   ]
+  },
+  {
+   "index": 16,
+   "id": "vehicle_region",
+   "kind": "root",
+   "dag": "vehicle",
+   "pool": "r0",
+   "period_ms": 33.0,
+   "input": null,
+   "c_median_ms": 0.2486,
+   "c_p99_ms": 0.72,
+   "u_median_alpha": 0.005198,
+   "callbacks": [
+    "sensing_vehicle_velocity_converter_callback_0",
+    "localization_twist_estimator_gyro_odometer_callback_0",
+    "vehicle_localization_pose_twist_fusion_filter_ekf_localizer_callback_3",
+    "vehicle_localization_pose_twist_fusion_filter_twist2accel_callback_1"
+   ]
+  }
+ ]
+}

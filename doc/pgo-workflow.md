@@ -302,16 +302,18 @@ the ceiling, as in the paper. The two changes from the region runtime are that a
 wait on another lane inside a CL (fork/join), and that lanes on distinct CPUs interfere
 only through those waits.
 
-**Objective**, lexicographic, smallest first: sources below their expected rate; chains
-with `L_c` over their deadline; chains over `(1 − margin)` of it; sum of `L_c / D_c`;
-largest worker load. `objective: (kind: sum)` drops the two count tiers. The chosen plan
-is scored a second time with every operation at its p99 cost; that column is reported,
-never optimised.
+**Objective**, lexicographic, smallest first: sources below their expected rate (a rate
+within 0.5% of nominal counts as kept); chains with `L_c` over their deadline; chains
+over `(1 − margin)` of it; sum of `L_c / D_c`; largest worker load. `objective: (kind:
+sum)` drops the two count tiers. The same tiers, from measured p99 latencies and delivered
+rates, rank the candidates after measurement.
 
 **Search.** `cu29-plan <config> --propose pgo.ron --profile profile.ron --cycle k` starts
 from the exported `k`-CopperList inventory (every required edge present, so any
 acyclic placement is valid) placed by a list schedule on `cpus`, one worker per CPU with
-the contract's `worker_policy`. Moves: move an occurrence to another worker and position;
+the contract's `worker_policy`. The search unit is one occurrence, or an anytime base
+occurrence with its refinements, which the executor runs together on one worker. The
+profile must carry the config's graph signature. Moves: move an occurrence to another worker and position;
 swap two neighbours on a worker. A move that closes a cycle with the required edges is
 rejected before scoring. Seeded, fixed budget, restarts; the best `N` plans with distinct
 scores are written as `plan-<n>.ron` with `predictions.ron`, each raising
@@ -324,24 +326,29 @@ measurement step decides.
 
 For each candidate: `Fixed::apply` into a config, build the application against it, run
 for the contract's duration, extract chains and rates with the same logreader subcommand
-as the profile. `cu29-plan --score --contract pgo.ron --predictions predictions.ron
-runs/*` writes one table: per candidate and chain, predicted and measured p50 / p99 /
-miss rate, delivered rates, and the objective, then names the best measured plan. The
+as the profile. `cu29-plan <config> --score pgo.ron --predictions predictions.ron
+--measured plan-1=pgo/runs/plan-1.ron ...` writes one table: per candidate and chain,
+predicted and measured p50 / p99 / misses, delivered rates, and the objective, then
+names the best measured plan. The
 baseline (the profiled run) is one row of the same table. Predictions are reported beside
 measurements and never replace them.
 
 ## 8. Workflow
 
+Shared recipes in `support/just/plan.just`, run from an example directory:
+
 ```sh
-just pgo-profile   [config] [seconds]     # run the current config, extract profile.ron
-just pgo-propose   [n]                    # candidates/plan-*.ron + predictions.ron
-just pgo-measure   [seconds]              # build + run each candidate, extract chains
-just pgo-score                            # the comparison table, best plan named
-just pgo-select    <plan>                 # Fixed::apply -> copperconfig-pgo.ron
+just pgo-profile <log> <logreader-bin> [pgo.ron] [pgo/profile.ron]   # measure a recorded run
+just pgo-propose [config] [pgo.ron] [profile] [out-dir] [cycle] [n]    # candidates + predictions
+just pgo-import  [config] [plan] [copperconfig-pgo.ron]              # embed one candidate
 ```
 
-Artifacts of one pass live under `pgo/<tag>/` in the example crate: profile, contract,
-candidates, predictions, runs, score. A pass is repeatable from its directory.
+Measuring a candidate is a rebuild of the application against the embedded config
+(the plan is compiled in), a run, and `pgo-profile` on its log; `cu29-plan --score`
+lays the candidates' profiles beside their predictions and names the best measured one.
+An example wraps these into its own `just profile`, `just propose`, `just measure`.
+Artifacts of one pass live under `pgo/` in the example: profile, candidates, predictions,
+the candidates' profiles, and the score. A pass is repeatable from its directory.
 
 ## 9. Steps
 

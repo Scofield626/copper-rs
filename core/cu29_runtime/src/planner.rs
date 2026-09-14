@@ -33,6 +33,8 @@ pub use fixed::Fixed;
 mod pgo;
 #[cfg(feature = "std")]
 mod propose;
+#[cfg(feature = "std")]
+mod score;
 pub use pgo::CuBackgroundPool;
 pub use pgo::CuChain;
 pub use pgo::CuChainProfile;
@@ -44,6 +46,7 @@ pub use pgo::CuOperationProfile;
 pub use pgo::CuProfile;
 pub use pgo::CuSourceProfile;
 pub use pgo::CuSourceRate;
+pub use pgo::graph_signature;
 #[cfg(feature = "std")]
 pub use propose::CuCandidate;
 #[cfg(feature = "std")]
@@ -56,6 +59,12 @@ pub use propose::CuWorkerPrediction;
 pub use propose::ProposeRequest;
 #[cfg(feature = "std")]
 pub use propose::propose;
+#[cfg(feature = "std")]
+pub use score::CuChainScore;
+#[cfg(feature = "std")]
+pub use score::CuScoreRow;
+#[cfg(feature = "std")]
+pub use score::CuScoreTable;
 mod schedule;
 pub use schedule::CuMissionPlan;
 pub use schedule::CuPlanBackground;
