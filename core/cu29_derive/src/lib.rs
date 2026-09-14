@@ -6233,15 +6233,17 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
 
                 #[cfg(target_os = "none")]
                 ::cu29::prelude::info!("CuApp new: creating runtime lifecycle stream");
-                let mut local_lifecycle_sink = stream_write::<RuntimeLifecycleRecord, S>(
-                    unified_logger.clone(),
-                    UnifiedLogType::RuntimeLifecycle,
-                    1024 * 64, // 64 KiB
-                )?;
-                #planner_resolved_stamp
                 let effective_config_ron = config
                     .serialize_ron()
                     .unwrap_or_else(|_| "<failed to serialize config>".to_string());
+                // The first record carries the effective configuration, which an
+                // embedded execution plan can grow past the usual 64 KiB.
+                let mut local_lifecycle_sink = stream_write::<RuntimeLifecycleRecord, S>(
+                    unified_logger.clone(),
+                    UnifiedLogType::RuntimeLifecycle,
+                    1024 * 64 + effective_config_ron.len(),
+                )?;
+                #planner_resolved_stamp
                 ::cu29::logcodec::set_effective_config_ron::<super::#mission_mod::CuStampedDataSet>(&effective_config_ron);
                 let stack_info = RuntimeLifecycleStackInfo {
                     app_name: env!("CARGO_PKG_NAME").to_string(),

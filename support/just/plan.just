@@ -37,11 +37,11 @@ pgo-profile log bin contract="pgo.ron" output="pgo/profile.ron" config="copperco
   #!/usr/bin/env bash
   set -euo pipefail
   cd "{{invocation_directory()}}"
-  mkdir -p "$(dirname "$5")"
+  mkdir -p "$(dirname "$4")"
   args=(run --release --bin "$2")
-  [[ -z "$7" ]] || args+=(--features "$7")
-  args+=(-- "$1" pgo-profile --contract "$3" --output "$5" --config "$6")
-  [[ -z "$7" ]] || args+=(--features "$7")
+  [[ -z "$6" ]] || args+=(--features "$6")
+  args+=(-- "$1" pgo-profile --contract "$3" --output "$4" --config "$5")
+  [[ -z "$6" ]] || args+=(--features "$6")
   cargo "${args[@]}"
 
 # Propose candidate plans for a contract from a profile.
