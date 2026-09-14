@@ -27,10 +27,11 @@
             type: "cu29::planner::Fixed",
             config: {
                 "plan": {
-                    "version": 1,
+                    "version": 2,
                     "missions": {
                         "default": {
                             "copperlists_per_cycle": 1,
+                            "max_in_flight": 1,
                             "steps": [
                                 {
                                     "key": "mission:default|task:left|phase:whole",
@@ -49,8 +50,9 @@
                                     "copperlist": 0,
                                 },
                             ],
-                            "lanes": [
+                            "workers": [
                                 {
+                                    "id": "main",
                                     "placement": {
                                         "kind": "main",
                                     },

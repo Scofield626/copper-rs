@@ -101,10 +101,11 @@ option select recorded runs identified by `Instantiated` lifecycle records.
 ## Experimental
 
 - Build-time schedules: `cu29::planner::{CuPlan, CuMissionPlan, CuPlanStep,
-  CuPlanLane, CuPlanPlacement, CuPlanDependency, Fixed}`, the versioned RON
-  plan format, and `cu29-plan --export-plan` / `--validate-plan` / `--import-plan`.
+  CuPlanWorker, CuPlanPlacement, CuPlanThread, CuPlanBackground,
+  CuPlanBackgroundResult, CuPlanDependency, Fixed}`, the versioned RON plan
+  format, and `cu29-plan --export-plan` / `--validate-plan` / `--import-plan`.
   Multicore and multi-CopperList representation/validation are supported;
-  fixed execution currently supports only one main lane and one CL per cycle.
+  fixed execution currently supports only one main worker and one CL per cycle.
 - `CuStatelessTask` and the `kind: stateless_task` RON task kind.
 - LogStream session manifests and `ReceiverRequirements` decoder geometry/bounds.
 - `remote-debug` feature and `cu29::remote_debug`.

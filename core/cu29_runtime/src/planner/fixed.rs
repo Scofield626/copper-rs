@@ -32,13 +32,15 @@ use cu29_traits::CuResult;
 use serde::Deserialize;
 use serde::Serialize;
 
-const PLAN_VERSION: u32 = 1;
+const PLAN_VERSION: u32 = 2;
 
 /// An experimental, portable process schedule for every mission in an app.
 ///
-/// Version 1 represents serial and multicore schedules, including schedules
-/// spanning several CopperLists. Each mission has a step inventory, execution
-/// lanes, and precedence constraints across lanes and repeating cycles.
+/// A plan represents serial and multicore schedules, including schedules
+/// spanning several CopperLists. Each mission is a repeating execution graph
+/// indexed by CopperList id: a step inventory, workers with their placement
+/// and order, background dispatch semantics, capacity, and precedence
+/// constraints across workers and repeating cycles.
 /// Entries retain existing error handling and anytime budget/skip semantics;
 /// fixing their order does not force optional refinements to run.
 ///
@@ -52,6 +54,11 @@ const PLAN_VERSION: u32 = 1;
 pub struct CuPlan {
     /// Format version. Unsupported versions are rejected before use.
     pub version: u32,
+    /// Resources (`bundle.resource`) that several components may use at the
+    /// same time. Every other resource bound by more than one component
+    /// orders those components like shared mutable state.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub concurrent_resources: Vec<String>,
     /// Schedule indexed by mission id (`default` without named missions).
     pub missions: BTreeMap<String, CuMissionPlan>,
 }
@@ -69,18 +76,20 @@ impl CuPlan {
             let plan = assemble_runtime_plan_for_mission(config, graph, &mission)?;
             missions.insert(
                 mission.clone(),
-                PlanShape::new(&plan, graph, &mission)?.serial_plan()?,
+                PlanShape::new(&plan, config, graph, &mission, &[])?.serial_plan()?,
             );
         }
         Ok(Self {
             version: PLAN_VERSION,
+            concurrent_resources: Vec::new(),
             missions,
         })
     }
 
-    /// Validate inventory, lane placement, acyclic precedence, message
-    /// dependencies, anytime phases, and mutable task/bridge state order
-    /// within and across CopperLists. This does not select an executor.
+    /// Validate inventory, worker placement, capacity, background entries,
+    /// acyclic precedence, message dependencies, anytime phases, and mutable
+    /// task/bridge/resource state order within and across CopperLists. This
+    /// does not select an executor.
     ///
     /// CPU availability, runtime memory sizing, execution times, and deadline
     /// feasibility are not properties checked by this structural validator.
@@ -94,7 +103,13 @@ impl CuPlan {
         }
         for (mission, graph) in missions {
             let canonical = assemble_runtime_plan_with_planner(config, graph, &Linearity)?;
-            let shape = PlanShape::new(&canonical, graph, &mission)?;
+            let shape = PlanShape::new(
+                &canonical,
+                config,
+                graph,
+                &mission,
+                &self.concurrent_resources,
+            )?;
             self.missions[&mission]
                 .validate(config, &shape)
                 .map_err(|e| CuError::from(format!("Plan for mission '{mission}': {e}")))?;
@@ -150,6 +165,8 @@ impl CuPlan {
 /// [`Fixed::apply`] to produce that configuration from a [`CuPlan`]. Unlike
 /// [`super::Pinned`], no bridge placement or anytime scheduling heuristic is
 /// applied to the supplied sequence. Invalid plans are errors, never hints.
+/// Worker threads are set up from the plan itself; `runtime.thread_pools`
+/// keeps only background pools.
 ///
 /// This consumes an already scheduled plan; [`super::CuPlanner`] remains the
 /// extension point for heuristics that choose a graph-node order. There is

@@ -1,14 +1,14 @@
 # Saving and enforcing an execution plan
 
 The experimental `CuPlan` format represents a repeating execution schedule for
-each mission. It supports multiple worker lanes, several CopperLists per cycle,
+each mission. It supports multiple workers, several CopperLists per cycle,
 and precedence constraints within and across cycles. Planning and validation
 happen at compile time or in offline tools.
 
 `Linearity` chooses a node order; `Pinned` accepts a task order and lets Copper
 place bridge stages and foreground anytime refinements. `Fixed` consumes an
 already scheduled plan. This PR supports **representation and validation** of
-multicore plans; fixed execution supports one main lane and one CopperList per
+multicore plans; fixed execution supports one main worker and one CopperList per
 cycle. Multicore execution and new scheduling heuristics are subsequent work.
 Unsupported execution fails compilation, including use with `parallel-rt`;
 placement and dependencies are never silently discarded.
@@ -49,36 +49,56 @@ export their baked effective config to capture the resolved schedule.
 
 ## Multicore representation
 
-Each mission contains:
+A mission plan is a repeating execution graph indexed by CopperList id. Each
+mission contains:
 
 - `copperlists_per_cycle`: the number of consecutive CLs in one repeating cycle.
+- `max_in_flight`: the largest number of CLs admitted but not yet committed;
+  `logging.copperlist_count` must preallocate at least that many.
 - `steps`: an inventory of `(key, copperlist)` occurrences. Keys are opaque
   process-step identities exported from Copper, including bridge stages and
   numbered anytime refinements; `copperlist` is an offset within the cycle.
-- `lanes`: placement plus an ordered list of inventory indices. Moving work
-  between lanes does not renumber the inventory or its dependencies.
+- `workers`: an id, a placement, and an ordered list of inventory indices.
+  Moving work between workers does not renumber the inventory or its
+  dependencies. `placement: (kind: "main")` is the application's main thread;
+  `(kind: "thread", cpu: Some(n), policy: Fifo(priority: p))` is a dedicated
+  thread with an optional CPU pin and a `runtime.thread_pools` scheduling
+  policy. Two threads may share a CPU; their policies then decide preemption.
+- `dispatcher`: the CPU pin and policy of the thread that admits and commits
+  CLs in a multicore plan.
+- `background`: one entry per `background:` task with its pool, `max_running`,
+  and what its gateway publishes into a CL: `(kind: "sampled")`, the newest
+  completed result, or `(kind: "lag", lag: d)`, the result of the compute
+  dispatched for CL `n - d`. Sampled results make content depend on timing;
+  `CuMissionPlan::nondeterminism` lists them.
 - `dependencies`: `(from, to, cycle_lag)` precedence edges. For schedule cycle
   `n`, `to(n)` waits for `from(n - cycle_lag)`. These are completion constraints,
   not changes to payload wiring.
+
+The plan-level `concurrent_resources` lists resources (`bundle.resource`) that
+several components may use at the same time. Every other resource bound by more
+than one component orders those components like shared mutable state.
 
 For example, this two-worker schedule pipelines two CopperLists per cycle:
 
 ```ron
 (
-    version: 1,
+    version: 2,
     missions: {
         "default": (
             copperlists_per_cycle: 2,
+            max_in_flight: 2,
             steps: [
                 (key: "mission:default|task:src|phase:whole", copperlist: 0),
                 (key: "mission:default|task:sink|phase:whole", copperlist: 0),
                 (key: "mission:default|task:src|phase:whole", copperlist: 1),
                 (key: "mission:default|task:sink|phase:whole", copperlist: 1),
             ],
-            lanes: [
-                (placement: (kind: "worker", pool: "rt", index: 0), steps: [0, 2]),
-                (placement: (kind: "worker", pool: "rt", index: 1), steps: [1, 3]),
+            workers: [
+                (id: "w0", placement: (kind: "thread", cpu: Some(1), policy: Fifo(priority: 60)), steps: [0, 2]),
+                (id: "w1", placement: (kind: "thread", cpu: Some(2), policy: Fifo(priority: 60)), steps: [1, 3]),
             ],
+            dispatcher: Some((cpu: Some(0), policy: Fifo(priority: 70))),
             dependencies: [
                 (from: 0, to: 1, cycle_lag: 0),
                 (from: 2, to: 3, cycle_lag: 0),
@@ -88,31 +108,30 @@ For example, this two-worker schedule pipelines two CopperLists per cycle:
 )
 ```
 
-The corresponding config must declare pool `rt` with at least two workers and
-a `src -> sink` graph. Each lane repeats in order, so source and sink state each
-advance in CL order. A lane's final event in cycle `n` precedes its first event
-in cycle `n+1`. There is **no global cycle barrier**. Dependencies on cycles
-before the initial cycle are initially satisfied. Explicit positive-lag edges
-can order a component whose occurrences move across lanes between cycles.
-
-A serial lane uses `placement: (kind: "main")`. Worker placement is logical:
-`runtime.thread_pools` maps a worker to CPU affinity using the existing
-`affinity[index % affinity.len()]` rule. This keeps plans portable; two workers
-sharing one affinity CPU remain distinct lanes and acquire no implicit
-precedence. The executor must honor lane order and all dependency edges.
+The corresponding config declares a `src -> sink` graph and
+`logging: (copperlist_count: 2)`. Each worker repeats in order, so source and
+sink state each advance in CL order. A worker's final event in cycle `n`
+precedes its first event in cycle `n+1`. There is **no global cycle barrier**.
+Dependencies on cycles before the initial cycle are initially satisfied.
+Explicit positive-lag edges can order a component whose occurrences move across
+workers between cycles. The executor must honor worker order and all dependency
+edges; worker threads take their CPU and policy from the plan.
 
 ## Validation and execution boundary
 
 Validation requires every process step exactly once per CL offset, every
-occurrence assigned to exactly one lane, valid and distinct worker placements,
-and no cycle among same-cycle dependency and lane-order edges. Message
+occurrence assigned to exactly one worker, distinct worker ids and valid
+policies, `max_in_flight` within the preallocated CLs, one `background` entry
+per background task with a known pool, and no cycle among same-cycle
+dependency and worker-order edges. Message
 producers must finish before consumers; anytime base and refinement phases
-must stay ordered. Calls sharing a mutable task or bridge instance must be
-ordered within a CL and across consecutive CLs, including the cycle boundary.
+must stay ordered. Calls sharing a mutable task or bridge instance, or a
+resource not listed in `concurrent_resources`, must be ordered within a CL and
+across consecutive CLs, including the cycle boundary.
 Stateless tasks are the exception, as described below.
 Dependencies may satisfy these constraints transitively. The exporter includes
 required data/phase/state edges so an optimizer can move independent work to
-separate lanes without reconstructing the graph's constraints.
+separate workers without reconstructing the graph's constraints.
 
 ## Stateless tasks
 

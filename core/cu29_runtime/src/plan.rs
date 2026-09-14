@@ -1885,7 +1885,7 @@ mod tests {
         ]))
         .unwrap();
         let mut plan = CuPlan::read(&plan_path).unwrap();
-        plan.missions.get_mut("default").unwrap().lanes[0]
+        plan.missions.get_mut("default").unwrap().workers[0]
             .steps
             .reverse();
         plan.write(&plan_path).unwrap();
@@ -1908,11 +1908,14 @@ mod tests {
         let svg = fs::read_to_string(svg_path).unwrap();
         assert!(svg.contains("task:right|phase:whole"));
         assert!(!svg.contains("Parallel projection"));
-        plan.missions.get_mut("default").unwrap().lanes = (0..2)
-            .map(|index| cu29_runtime::planner::CuPlanLane {
-                placement: cu29_runtime::planner::CuPlanPlacement::Worker {
-                    pool: "rt".into(),
-                    index,
+        let mission = plan.missions.get_mut("default").unwrap();
+        mission.max_in_flight = 2;
+        mission.workers = (0..2)
+            .map(|index| cu29_runtime::planner::CuPlanWorker {
+                id: format!("w{index}"),
+                placement: cu29_runtime::planner::CuPlanPlacement::Thread {
+                    cpu: Some(index as usize),
+                    policy: Default::default(),
                 },
                 steps: vec![index],
             })

@@ -32,10 +32,13 @@ pub use fixed::CuPlan;
 pub use fixed::Fixed;
 mod schedule;
 pub use schedule::CuMissionPlan;
+pub use schedule::CuPlanBackground;
+pub use schedule::CuPlanBackgroundResult;
 pub use schedule::CuPlanDependency;
-pub use schedule::CuPlanLane;
 pub use schedule::CuPlanPlacement;
 pub use schedule::CuPlanStep;
+pub use schedule::CuPlanThread;
+pub use schedule::CuPlanWorker;
 
 /// Default number of preallocated CopperLists compiled into a runtime.
 ///

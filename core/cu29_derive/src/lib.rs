@@ -11999,9 +11999,9 @@ mod tests {
         )
         .unwrap();
         let mut plan = CuPlan::from_config(&config).unwrap();
-        plan.missions.get_mut("default").unwrap().lanes[0].placement = CuPlanPlacement::Worker {
-            pool: "rt".into(),
-            index: 0,
+        plan.missions.get_mut("default").unwrap().workers[0].placement = CuPlanPlacement::Thread {
+            cpu: Some(0),
+            policy: Default::default(),
         };
         Fixed::new(plan).unwrap().apply(&mut config).unwrap();
         let error =
