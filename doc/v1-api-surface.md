@@ -107,6 +107,10 @@ option select recorded runs identified by `Instantiated` lifecycle records.
   Serial plans run on the main thread; multicore plans run on the lane executor
   behind the `parallel-rt` feature.
 - `CuStatelessTask` and the `kind: stateless_task` RON task kind.
+- Profile-guided scheduling inputs: `cu29::planner::{CuContract, CuChain,
+  CuSourceRate, CuObjective, CuObjectiveKind, CuBackgroundPool, CuProfile,
+  CuOperationProfile, CuChainProfile, CuSourceProfile, CuCostStats}`,
+  `cu29_export::pgo::compute_profile`, and the logreader `pgo-profile` command.
 - LogStream session manifests and `ReceiverRequirements` decoder geometry/bounds.
 - `remote-debug` feature and `cu29::remote_debug`.
 - `parallel-rt` feature and parallel executor APIs.

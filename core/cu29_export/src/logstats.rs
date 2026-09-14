@@ -811,6 +811,11 @@ fn jitter_stats_from(stats: &CuDurationStatistics) -> DurationStats {
     }
 }
 
+/// A stable identity of one mission graph: its nodes, types and edges.
+pub(crate) fn graph_signature(graph: &CuGraph, mission: Option<&str>) -> String {
+    build_graph_signature(graph, mission)
+}
+
 fn build_graph_signature(graph: &CuGraph, mission: Option<&str>) -> String {
     let mut parts = Vec::new();
     parts.push(format!("mission={}", mission.unwrap_or("default")));

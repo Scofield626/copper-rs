@@ -125,9 +125,10 @@ copperlists_per_cycle: 2,
 max_in_flight: 3,
 ```
 
-`max_in_flight` bounds the CLs admitted but not yet committed; the runtime must
-preallocate at least that many (`logging.copperlist_count >= max_in_flight`, validated;
-the logger may hold committed CLs on top). CLs commit in
+`max_in_flight` bounds the CLs admitted but not yet committed; it is at least `k`, so a
+worker can never wait for a CL of a cycle that is only partly admitted, and the runtime
+must preallocate at least that many (`logging.copperlist_count >= max_in_flight`,
+validated; the logger may hold committed CLs on top). CLs commit in
 CL id order once every occurrence for that CL has completed and the previous CL has
 committed. Logging, monitoring and keyframe capture happen at commit, so they see the same
 order as a serial run. `k`, `max_in_flight` and the number of lanes are independent:
@@ -230,14 +231,13 @@ in flight, and requires the recorded CLs to be equal, keyed by producing task.
 ## 4. Profile
 
 The profile is extracted from a log by the application's logreader
-(`extract-pgo-profile --contract pgo.ron --out profile.ron`), because reading the log needs
-the generated message types. It contains, keyed by operation key:
+(`<logreader> <log> pgo-profile --contract pgo.ron --output profile.ron`), because reading
+the log needs the generated message types. It contains, keyed by operation key:
 
 - cost statistics (min, p50, mean, p95, p99, max) split by *fired* (an output payload was
   produced) and *skipped* CLs;
 - the firing rate of each operation over the window, which gives its period;
-- for background tasks, compute cost and gateway cost separately;
-- per-CL dispatcher and commit overhead;
+- the wall span of each CL's steps;
 - the chain measurements of §7 for the profiled run, as a baseline;
 - the config signature and the plan the run executed, so a profile is never applied to a
   graph it was not recorded on.

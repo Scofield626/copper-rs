@@ -15,6 +15,7 @@
 
 mod fsck;
 pub mod logstats;
+pub mod pgo;
 mod runs;
 
 #[cfg(feature = "mcap")]
@@ -147,6 +148,25 @@ pub enum Command {
     LogStats {
         /// Output JSON file path
         #[arg(short, long, default_value = "cu29_logstats.json")]
+        output: PathBuf,
+        /// Config override; defaults to the selected run's recorded configuration.
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Mission id override; defaults to the mission recorded in the log
+        #[arg(long)]
+        mission: Option<String>,
+        /// Comma-separated Cargo features used by conditional config fragments
+        #[arg(long, value_delimiter = ',')]
+        features: Vec<String>,
+    },
+    /// Measure a run against a scheduling contract: per-operation costs,
+    /// chain latencies and delivered rates, as a RON profile.
+    PgoProfile {
+        /// The contract (`pgo.ron`) naming chains, sources and CPUs.
+        #[arg(long)]
+        contract: PathBuf,
+        /// Output RON file path
+        #[arg(short, long, default_value = "pgo-profile.ron")]
         output: PathBuf,
         /// Config override; defaults to the selected run's recorded configuration.
         #[arg(long)]
@@ -347,6 +367,20 @@ where
         } => {
             run_logstats::<P>(run, dl, output, config, mission, &features)?;
         }
+        Command::PgoProfile {
+            contract,
+            output,
+            config,
+            mission,
+            features,
+        } => {
+            let cfg = run_config(run, config, &features)?;
+            let mission = resolve_logstats_mission(&cfg, mission, run.missions.first().cloned())?;
+            let contract = cu29::planner::CuContract::read(&contract)?;
+            let reader = dl.stream(UnifiedLogType::CopperList);
+            let profile = pgo::compute_profile::<P>(reader, &cfg, mission.as_deref(), &contract)?;
+            profile.write(&output)?;
+        }
         #[cfg(feature = "mcap")]
         Command::ExportMcap {
             output,
@@ -389,6 +423,27 @@ where
     Ok(())
 }
 
+/// The configuration a statistics command works from: an explicit file, or
+/// the configuration the selected run recorded.
+fn run_config(
+    run: &runs::RecordedRun,
+    config: Option<PathBuf>,
+    features: &[String],
+) -> CuResult<CuConfig> {
+    if config.is_none() && run.config.is_some() {
+        return CuConfig::deserialize_ron(run.config.as_deref().unwrap()).map_err(|e| {
+            CuError::new_with_cause("Failed to read the selected run's configuration", e)
+        });
+    }
+    let config = config.unwrap_or_else(|| PathBuf::from("copperconfig.ron"));
+    let config_path = config
+        .to_str()
+        .ok_or_else(|| CuError::from("Config path is not valid UTF-8"))?;
+    let feature_refs = features.iter().map(String::as_str).collect::<Vec<_>>();
+    cu29::config::read_configuration_with_features(config_path, &feature_refs)
+        .map_err(|e| CuError::new_with_cause("Failed to read configuration", e))
+}
+
 fn run_logstats<P>(
     run: &runs::RecordedRun,
     dl: runs::RunReader,
@@ -400,19 +455,7 @@ fn run_logstats<P>(
 where
     P: CopperListTuple + CuPayloadRawBytes,
 {
-    let cfg = if config.is_none() && run.config.is_some() {
-        CuConfig::deserialize_ron(run.config.as_deref().unwrap()).map_err(|e| {
-            CuError::new_with_cause("Failed to read the selected run's configuration", e)
-        })?
-    } else {
-        let config = config.unwrap_or_else(|| PathBuf::from("copperconfig.ron"));
-        let config_path = config
-            .to_str()
-            .ok_or_else(|| CuError::from("Config path is not valid UTF-8"))?;
-        let feature_refs = features.iter().map(String::as_str).collect::<Vec<_>>();
-        cu29::config::read_configuration_with_features(config_path, &feature_refs)
-            .map_err(|e| CuError::new_with_cause("Failed to read configuration", e))?
-    };
+    let cfg = run_config(run, config, features)?;
     let mission = resolve_logstats_mission(&cfg, mission, run.missions.first().cloned())?;
     let reader = dl.stream(UnifiedLogType::CopperList);
     let stats = compute_logstats::<P>(reader, &cfg, mission.as_deref())?;
