@@ -5,8 +5,9 @@ use cu29_runtime::config::{
 };
 use cu29_runtime::curuntime::{CuExecutionStep, CuExecutionUnit, CuStepPhase, CuTaskType};
 use cu29_runtime::planner::{
-    AssembledPlan, CuPlan, DEFAULT_COPPERLIST_COUNT, Fixed, PlanEntity, PlanEntityKind,
-    assemble_runtime_plan_for_mission, mission_graphs, step_key,
+    AssembledPlan, CuContract, CuPlan, CuProfile, DEFAULT_COPPERLIST_COUNT, Fixed, PlanEntity,
+    PlanEntityKind, ProposeRequest, assemble_runtime_plan_for_mission, mission_graphs, propose,
+    step_key,
 };
 use cu29_traits::{CuError, CuResult};
 use serde::Deserialize;
@@ -71,6 +72,30 @@ struct Args {
     /// Validate a serial or multicore plan without selecting an executor.
     #[arg(long, conflicts_with_all = ["mission", "list_missions", "logstats", "open", "import_plan"])]
     validate_plan: Option<PathBuf>,
+    /// Propose candidate plans for the contract at this path, from `--profile`.
+    #[arg(long, requires = "profile", conflicts_with_all = ["list_missions", "logstats", "open", "import_plan", "validate_plan", "export_plan"])]
+    propose: Option<PathBuf>,
+    /// The profile a logreader's `pgo-profile` command wrote.
+    #[arg(long, requires = "propose")]
+    profile: Option<PathBuf>,
+    /// Directory receiving `plan-<n>.ron` and `predictions.ron`.
+    #[arg(long, default_value = "candidates")]
+    out_dir: PathBuf,
+    /// How many distinct candidates to write.
+    #[arg(long, default_value_t = 3)]
+    candidates: usize,
+    /// CopperLists per cycle of the candidates.
+    #[arg(long, default_value_t = 1)]
+    cycle: u32,
+    /// Seed of the local search.
+    #[arg(long, default_value_t = 20260914)]
+    seed: u64,
+    /// Moves per restart of the local search.
+    #[arg(long, default_value_t = 2000)]
+    moves: usize,
+    /// Restarts of the local search.
+    #[arg(long, default_value_t = 8)]
+    restarts: usize,
 }
 
 fn main() {
@@ -88,6 +113,9 @@ fn run(args: Args) -> CuResult<()> {
     }
     if let Some(path) = &args.validate_plan {
         return CuPlan::read(path)?.validate(&config);
+    }
+    if let Some(contract_path) = &args.propose {
+        return propose_candidates(&config, &args, contract_path);
     }
     if let Some(path) = &args.import_plan {
         Fixed::new(CuPlan::read(path)?)?.apply(&mut config)?;
@@ -132,6 +160,61 @@ fn run(args: Args) -> CuResult<()> {
                 error,
             )
         })?;
+    }
+    Ok(())
+}
+
+/// Writes the proposer's candidates and their predictions under `out_dir`.
+fn propose_candidates(config: &CuConfig, args: &Args, contract_path: &Path) -> CuResult<()> {
+    let contract = CuContract::read(contract_path)?;
+    let profile = CuProfile::read(args.profile.as_ref().expect("clap requires --profile"))?;
+    let mission = args
+        .mission
+        .clone()
+        .or_else(|| Some(profile.mission.clone()))
+        .expect("a profile names its mission");
+    let candidates = propose(&ProposeRequest {
+        config,
+        mission: &mission,
+        contract: &contract,
+        profile: &profile,
+        copperlists_per_cycle: args.cycle,
+        candidates: args.candidates,
+        seed: args.seed,
+        moves: args.moves,
+        restarts: args.restarts,
+    })?;
+    fs::create_dir_all(&args.out_dir)
+        .map_err(|e| CuError::new_with_cause("Could not create the candidates directory", e))?;
+    let mut predictions = BTreeMap::new();
+    for (index, candidate) in candidates.iter().enumerate() {
+        let name = format!("plan-{}", index + 1);
+        candidate
+            .plan
+            .write(&args.out_dir.join(format!("{name}.ron")))?;
+        predictions.insert(name, candidate.prediction.clone());
+    }
+    let text = ron::ser::to_string_pretty(&predictions, ron::ser::PrettyConfig::default())
+        .map_err(|e| CuError::new_with_cause("Could not serialize predictions", e))?;
+    fs::write(args.out_dir.join("predictions.ron"), text)
+        .map_err(|e| CuError::new_with_cause("Could not write predictions", e))?;
+    for (name, prediction) in &predictions {
+        let worst = prediction
+            .chains
+            .iter()
+            .max_by(|a, b| a.1.ratio.total_cmp(&b.1.ratio))
+            .map(|(id, chain)| {
+                format!(
+                    "{id} {:.1}/{:.0} ms",
+                    chain.latency_ns as f64 / 1e6,
+                    chain.deadline_ns as f64 / 1e6
+                )
+            })
+            .unwrap_or_default();
+        println!(
+            "{name}: score {:?} | tightest chain {worst}",
+            prediction.score
+        );
     }
     Ok(())
 }
@@ -2293,6 +2376,14 @@ mod tests {
             import_plan: None,
             write_config: None,
             validate_plan: None,
+            propose: None,
+            profile: None,
+            out_dir: PathBuf::from("candidates"),
+            candidates: 3,
+            cycle: 1,
+            seed: 0,
+            moves: 0,
+            restarts: 0,
         })
         .unwrap();
         assert!(output_path.is_file());
@@ -2314,6 +2405,14 @@ mod tests {
             import_plan: None,
             write_config: None,
             validate_plan: None,
+            propose: None,
+            profile: None,
+            out_dir: PathBuf::from("candidates"),
+            candidates: 3,
+            cycle: 1,
+            seed: 0,
+            moves: 0,
+            restarts: 0,
         });
         assert!(missing.is_err());
     }
@@ -2356,6 +2455,14 @@ mod tests {
             import_plan: None,
             write_config: None,
             validate_plan: None,
+            propose: None,
+            profile: None,
+            out_dir: PathBuf::from("candidates"),
+            candidates: 3,
+            cycle: 1,
+            seed: 0,
+            moves: 0,
+            restarts: 0,
         })
         .unwrap();
 

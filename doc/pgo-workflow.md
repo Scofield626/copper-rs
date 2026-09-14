@@ -284,9 +284,11 @@ form and cheap, so it ranks every candidate the search visits. It is a predictio
 measurement, and is written beside every candidate and reported beside its measurement.
 
 **Analytical model.** The unit is the lane (the paper's region): a fixed sequence on one
-worker. With `C_i` the mean profiled cost of lane `i` per cycle, `T_i` its period (the CL
-period times `k`), `g` the dispatch granularity, and `hp(i)` the higher-priority lanes on
-the same CPU, the response time is the paper's fixpoint
+worker. An occurrence's expected cost is its profiled fired cost weighted by its firing
+probability per CL, plus its skipped cost otherwise; a background gateway costs nothing
+(its compute runs on its pool). With `C_i` the cost of lane `i` per cycle, `T_i` its
+period (the CL period times `k`), `g` the dispatch granularity, and `hp(i)` the
+higher-priority lanes on the same CPU, the response time is the paper's fixpoint
 
     R_i = C_i + sum_{j in hp(i)} ceil((R_i + g) / T*_j) C_j,   T*_j = max(T_j, R_j + g/2)
 
@@ -306,13 +308,17 @@ largest worker load. `objective: (kind: sum)` drops the two count tiers. The cho
 is scored a second time with every operation at its p99 cost; that column is reported,
 never optimised.
 
-**Search.** Start from a list schedule on `cpus` (ready operations ordered by the slack of
-the tightest chain through them, first-fit by load). Moves: move an occurrence to another
-lane and position; swap two occurrences on a lane; change a worker's CPU or priority;
-give a stateless task's offsets different workers (`k = 2`); change `max_in_flight`.
-A move that breaks a required edge is rejected before scoring. Seeded, fixed budget,
-restarts; the best `N` plans with distinct scores are written. The proposer never claims
-optimality; the measurement step decides.
+**Search.** `cu29-plan <config> --propose pgo.ron --profile profile.ron --cycle k` starts
+from the exported `k`-CopperList inventory (every required edge present, so any
+acyclic placement is valid) placed by a list schedule on `cpus`, one worker per CPU with
+the contract's `worker_policy`. Moves: move an occurrence to another worker and position;
+swap two neighbours on a worker. A move that closes a cycle with the required edges is
+rejected before scoring. Seeded, fixed budget, restarts; the best `N` plans with distinct
+scores are written as `plan-<n>.ron` with `predictions.ron`, each raising
+`logging.copperlist_count` to its `max_in_flight` on import. With `k = 2` a stateless
+task's two occurrences may land on different workers. Worker priorities on a shared CPU
+and `max_in_flight` moves are not searched yet. The proposer never claims optimality; the
+measurement step decides.
 
 ## 7. Measuring and selecting
 

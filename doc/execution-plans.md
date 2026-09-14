@@ -37,7 +37,8 @@ just plan-import copperconfig.ron candidate.ron copperconfig-fixed.ron
 ```
 
 Import validates and embeds the supplied plan as the `plan` parameter of
-`runtime.planner` with `type: "cu29::planner::Fixed"`. To execute the plan,
+`runtime.planner` with `type: "cu29::planner::Fixed"`, raising
+`logging.copperlist_count` to the plan's `max_in_flight` when it is smaller. To execute the plan,
 point the runtime macro, logreader's `gen_cumsgs!`, and replay macro at the
 resulting config and rebuild (with the `parallel-rt` feature for a multicore
 plan). Alternatively, replace the original config with the reviewed result. A

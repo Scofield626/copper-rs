@@ -2,6 +2,7 @@
 
 use super::AssembledPlan;
 use super::CuMissionPlan;
+use super::DEFAULT_COPPERLIST_COUNT;
 use super::FIXED_PLANNER;
 use super::LaneOccurrence;
 use super::LanePlan;
@@ -89,6 +90,31 @@ impl CuPlan {
         })
     }
 
+    /// Export the canonical schedule as an inventory of `copperlists_per_cycle`
+    /// CopperLists with every required edge, run in CopperList order by one
+    /// thread (the main thread when the cycle is one CopperList). This is the
+    /// starting point of a proposer, which moves occurrences between workers
+    /// and chooses their order itself.
+    pub fn from_config_cyclic(config: &CuConfig, copperlists_per_cycle: u32) -> CuResult<Self> {
+        if copperlists_per_cycle == 0 {
+            return Err(CuError::from("copperlists_per_cycle must be positive"));
+        }
+        let mut missions = BTreeMap::new();
+        for (mission, graph) in mission_graphs(config) {
+            let plan = assemble_runtime_plan_with_planner(config, graph, &Linearity)?;
+            missions.insert(
+                mission.clone(),
+                PlanShape::new(&plan, config, graph, &mission, &[])?
+                    .cyclic_plan(copperlists_per_cycle)?,
+            );
+        }
+        Ok(Self {
+            version: PLAN_VERSION,
+            concurrent_resources: Vec::new(),
+            missions,
+        })
+    }
+
     /// Validate inventory, worker placement, capacity, background entries,
     /// acyclic precedence, message dependencies, anytime phases, and mutable
     /// task/bridge/resource state order within and across CopperLists. This
@@ -125,6 +151,22 @@ impl CuPlan {
             orders.insert(mission, order);
         }
         Ok(orders)
+    }
+
+    /// Raises `logging.copperlist_count` to the largest `max_in_flight` of
+    /// the plan, so the runtime preallocates what the plan keeps in flight.
+    pub fn provide_capacity(&self, config: &mut CuConfig) {
+        let needed = self
+            .missions
+            .values()
+            .map(|mission| mission.max_in_flight as usize)
+            .max()
+            .unwrap_or(0);
+        let logging = config.logging.get_or_insert_with(Default::default);
+        let current = logging.copperlist_count.unwrap_or(DEFAULT_COPPERLIST_COUNT);
+        if needed > current {
+            logging.copperlist_count = Some(needed);
+        }
     }
 
     /// Serialize a plan as human-editable RON. Graph legality is checked by
@@ -215,7 +257,10 @@ impl Fixed {
     /// # }
     /// ```
     pub fn apply(&self, config: &mut CuConfig) -> CuResult<()> {
-        self.plan.validate(config)?;
+        let mut prepared = config.clone();
+        self.plan.provide_capacity(&mut prepared);
+        self.plan.validate(&prepared)?;
+        *config = prepared;
         let value = cu29_value::to_value(&self.plan)
             .map_err(|e| CuError::new_with_cause("Could not encode execution plan parameter", e))?;
         let value = Value::deserialize(value)

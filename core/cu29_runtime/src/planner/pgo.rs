@@ -1,6 +1,7 @@
 //! Profile-guided scheduling inputs: the application contract and the
 //! execution profile extracted from a recorded log.
 
+use super::CuPlanThread;
 use crate::config::CuConfig;
 use crate::config::Flavor;
 use crate::config::SchedulingPolicy;
@@ -39,6 +40,12 @@ pub struct CuContract {
     /// Pools for background compute, with their CPUs and policy.
     #[serde(default)]
     pub background_pools: Vec<CuBackgroundPool>,
+    /// Scheduling policy of every worker thread a candidate creates.
+    #[serde(default)]
+    pub worker_policy: SchedulingPolicy,
+    /// Placement of the thread that admits and commits CopperLists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatcher: Option<CuPlanThread>,
 }
 
 /// A latency chain from a source task to a sink task, measured per

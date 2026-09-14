@@ -268,6 +268,76 @@ impl PlanShape {
         })
     }
 
+    /// The inventory for `copperlists_per_cycle` CopperLists with every
+    /// required edge, run in CopperList order by one thread. A proposer moves
+    /// occurrences between workers without touching the edges.
+    pub(super) fn cyclic_plan(self, copperlists_per_cycle: u32) -> CuResult<CuMissionPlan> {
+        if copperlists_per_cycle <= 1 {
+            return self.serial_plan();
+        }
+        let per_cl = self.keys.len();
+        let occurrence = |index: usize, offset: u32| step_id(offset as usize * per_cl + index);
+        let mut dependencies = BTreeSet::new();
+        for offset in 0..copperlists_per_cycle {
+            for &(from, to) in &self.required {
+                dependencies.insert(CuPlanDependency {
+                    from: occurrence(from, offset)?,
+                    to: occurrence(to, offset)?,
+                    cycle_lag: 0,
+                });
+            }
+        }
+        for component in &self.components {
+            let (Some(&first), Some(&last)) = (component.first(), component.last()) else {
+                continue;
+            };
+            for offset in 0..copperlists_per_cycle {
+                for pair in component.windows(2) {
+                    dependencies.insert(CuPlanDependency {
+                        from: occurrence(pair[0], offset)?,
+                        to: occurrence(pair[1], offset)?,
+                        cycle_lag: 0,
+                    });
+                }
+                if offset + 1 < copperlists_per_cycle {
+                    dependencies.insert(CuPlanDependency {
+                        from: occurrence(last, offset)?,
+                        to: occurrence(first, offset + 1)?,
+                        cycle_lag: 0,
+                    });
+                }
+            }
+            dependencies.insert(CuPlanDependency {
+                from: occurrence(last, copperlists_per_cycle - 1)?,
+                to: occurrence(first, 0)?,
+                cycle_lag: 1,
+            });
+        }
+        let mut steps = Vec::with_capacity(per_cl * copperlists_per_cycle as usize);
+        for offset in 0..copperlists_per_cycle {
+            steps.extend(self.keys.iter().map(|key| CuPlanStep {
+                key: key.clone(),
+                copperlist: offset,
+            }));
+        }
+        Ok(CuMissionPlan {
+            copperlists_per_cycle,
+            max_in_flight: copperlists_per_cycle,
+            workers: vec![CuPlanWorker {
+                id: "w0".into(),
+                placement: CuPlanPlacement::Thread {
+                    cpu: None,
+                    policy: SchedulingPolicy::Fair,
+                },
+                steps: (0..steps.len()).map(step_id).collect::<CuResult<_>>()?,
+            }],
+            steps,
+            dispatcher: None,
+            background: self.background,
+            dependencies: dependencies.into_iter().collect(),
+        })
+    }
+
     pub(super) fn serial_plan(self) -> CuResult<CuMissionPlan> {
         let mut dependencies = BTreeSet::new();
         for (from, to) in self.required {
@@ -1097,6 +1167,37 @@ mod tests {
         assert!(err.to_string().contains("Missing precedence"), "{err}");
         plan.concurrent_resources = vec!["board.i2c".into()];
         plan.validate(&config).unwrap();
+    }
+
+    #[test]
+    fn cyclic_export_carries_every_edge_for_each_copperlist_and_validates() {
+        let config = chain();
+        let plan = CuPlan::from_config_cyclic(&config, 2).unwrap();
+        plan.validate(&config).unwrap();
+        let mission = &plan.missions["default"];
+        assert_eq!(
+            (mission.copperlists_per_cycle, mission.max_in_flight),
+            (2, 2)
+        );
+        assert_eq!(mission.steps.len(), 4);
+        assert_eq!(mission.workers.len(), 1);
+        // Data edge per CL, state chain across CLs, and the cycle wrap.
+        let count = |lag: u32| {
+            mission
+                .dependencies
+                .iter()
+                .filter(|e| e.cycle_lag == lag)
+                .count()
+        };
+        assert_eq!(count(0), 2 + 2);
+        assert_eq!(count(1), 2);
+        assert!(CuPlan::from_config_cyclic(&config, 0).is_err());
+        // A larger cycle needs more preallocated CopperLists; apply provides them.
+        let mut config = config;
+        let three = CuPlan::from_config_cyclic(&config, 3).unwrap();
+        assert!(three.validate(&config).is_err());
+        Fixed::new(three).unwrap().apply(&mut config).unwrap();
+        assert_eq!(config.logging.as_ref().unwrap().copperlist_count, Some(3));
     }
 
     #[test]
