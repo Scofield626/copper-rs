@@ -74,16 +74,17 @@ timing, so the proposer must choose one.
 
 ### 2.3 Workers
 
-The plan owns its workers; `Fixed::apply` writes the matching `runtime.thread_pools`
-entries into the config so that the runtime's existing thread setup applies them.
+The plan owns its workers. The executor is generated from the plan, so it applies each
+worker's CPU and policy itself with the runtime's existing thread setup; nothing is
+duplicated into `runtime.thread_pools`, which keeps only background pools.
 
 ```ron
 workers: [
-    (id: "w0", cpu: Some(1), policy: Fifo(priority: 70), steps: [0, 2, 5]),
-    (id: "w1", cpu: Some(2), policy: Fifo(priority: 70), steps: [1, 3]),
-    (id: "w2", cpu: Some(2), policy: Fifo(priority: 40), steps: [4]),
+    (id: "w0", placement: (kind: "thread", cpu: Some(1), policy: Fifo(priority: 70)), steps: [0, 2, 5]),
+    (id: "w1", placement: (kind: "thread", cpu: Some(2), policy: Fifo(priority: 70)), steps: [1, 3]),
+    (id: "w2", placement: (kind: "thread", cpu: Some(2), policy: Fifo(priority: 40)), steps: [4]),
 ],
-dispatcher: (cpu: Some(0), policy: Fifo(priority: 80)),
+dispatcher: Some((cpu: Some(0), policy: Fifo(priority: 80))),
 ```
 
 - A **lane worker** runs its `steps` (occurrence indices) in that order once per cycle and
@@ -95,8 +96,8 @@ dispatcher: (cpu: Some(0), policy: Fifo(priority: 80)),
 - The **dispatcher** is the main thread: it admits CLs, commits them in order, and drives
   keyframes. It runs no operation. Its own CPU and policy are part of the plan because a
   dispatcher on `SCHED_OTHER` next to FIFO workers slips releases.
-- `placement: main` for a single lane with `k = 1` and no other worker is the serial
-  subset: the current executor, unchanged.
+- `placement: (kind: "main")` for a single worker with `k = 1` and `max_in_flight = 1`
+  is the serial subset: the current executor, unchanged.
 
 ### 2.4 Background work
 
@@ -121,8 +122,9 @@ copperlists_per_cycle: 2,
 max_in_flight: 3,
 ```
 
-`max_in_flight` bounds the CLs admitted but not yet committed; it is the storage the
-runtime must preallocate (`logging.copperlist_count`, validated to match). CLs commit in
+`max_in_flight` bounds the CLs admitted but not yet committed; the runtime must
+preallocate at least that many (`logging.copperlist_count >= max_in_flight`, validated;
+the logger may hold committed CLs on top). CLs commit in
 CL id order once every occurrence for that CL has completed and the previous CL has
 committed. Logging, monitoring and keyframe capture happen at commit, so they see the same
 order as a serial run. `k`, `max_in_flight` and the number of lanes are independent:
@@ -146,12 +148,13 @@ as under the serial executor, and replay stays deterministic at CL granularity a
 The format replaces the current one in place; nothing released carries the old shape, so
 there is no compatibility path. It keeps the inventory (`steps`), `dependencies` and
 `copperlists_per_cycle`, replaces `lanes` by `workers`, and adds `max_in_flight`,
-`dispatcher`, `background`, and a `determinism` summary the tools maintain. The serial
-subset re-exports unchanged in meaning.
+`dispatcher`, `background`, and the plan-level `concurrent_resources` list. Validation
+reports the reasons a plan is not deterministic (§2.6). The serial subset re-exports
+unchanged in meaning.
 
 Validation adds to the current checks: every background task has one `background` entry
 and its pool exists; `result: Lag(d)` has `d ≥ 1`; every worker has a distinct id;
-`max_in_flight ≥ 1` and `logging.copperlist_count == max_in_flight`; resource edges are
+`max_in_flight ≥ 1` and `logging.copperlist_count >= max_in_flight`; resource edges are
 present or declared away; the plan's cycle graph is deadlock-free (lag-0 edges plus lane
 order acyclic; each lane's last occurrence precedes its first with lag 1). Validation does
 not check CPU existence, real-time permissions, or timing; the executor reports those.
@@ -213,8 +216,7 @@ the generated message types. It contains, keyed by operation key:
 
 - cost statistics (min, p50, mean, p95, p99, max) split by *fired* (an output payload was
   produced) and *skipped* CLs;
-- the firing sequence: for a window of CLs, which operations fired and what each cost, so a
-  proposer can replay the recorded firing pattern instead of assuming periods;
+- the firing rate of each operation over the window, which gives its period;
 - for background tasks, compute cost and gateway cost separately;
 - per-CL dispatcher and commit overhead, and the keyframe bubble;
 - the chain measurements of §7 for the profiled run, as a baseline;
@@ -256,17 +258,11 @@ the source's time of validity, for every CL in which the sink produced a payload
 `cu29-plan --propose --contract pgo.ron --profile profile.ron --out candidates/` writes
 `N` distinct plans plus `predictions.ron`.
 
-**Two models, two questions.** The paper's response-time analysis answers "what is the
-worst a chain can see under this placement and these priorities", from a critical
-instant, with no dependence on the phasing that happened to be recorded. It is closed
-form and cheap, so it ranks every candidate the search visits. A discrete-event
-simulation answers "what will this plan typically do on the recorded workload": it
-replays the firing sequence through the plan and yields p50 / p99 per chain, delivered
-rates, worker loads and the commit backlog, including effects the closed form does not
-express (admission slip under `max_in_flight`, waits on cross-lane edges, multi-CL
-pipelining, keyframe bubbles). Neither is a measurement. The search ranks by the
-analytical model and simulates the best `N` distinct plans; both predictions are written
-beside every candidate and reported beside its measurement.
+**Model.** The paper's response-time analysis, with the lane as the unit. It answers
+"what is the worst a chain can see under this placement and these priorities", from a
+critical instant, independent of the phasing that happened to be recorded; it is closed
+form and cheap, so it ranks every candidate the search visits. It is a prediction, not a
+measurement, and is written beside every candidate and reported beside its measurement.
 
 **Analytical model.** The unit is the lane (the paper's region): a fixed sequence on one
 worker. With `C_i` the mean profiled cost of lane `i` per cycle, `T_i` its period (the CL
@@ -285,23 +281,17 @@ the ceiling, as in the paper. The two changes from the region runtime are that a
 wait on another lane inside a CL (fork/join), and that lanes on distinct CPUs interfere
 only through those waits.
 
-**Simulation.** The dispatcher admits CLs at the rate target subject to `max_in_flight`;
-each lane runs its occurrences in order, waiting on edges and admission; each occurrence
-costs its profiled duration for that CL of the firing sequence (fired or skipped);
-workers sharing a CPU are scheduled by fixed priority with preemption; background
-compute runs on its pool with `max_running`. The simulation is exact under the profiled
-costs and the recorded phasing, and only that.
-
-**Objective**, lexicographic, smallest first, on the analytical model during search:
-sources below their expected rate; chains with `L_c` over their deadline; chains over
-`(1 − margin)` of it; sum of `L_c / D_c`; largest worker load. `objective: (kind: sum)`
-drops the two count tiers. The simulated p99 is reported, never optimised.
+**Objective**, lexicographic, smallest first: sources below their expected rate; chains
+with `L_c` over their deadline; chains over `(1 − margin)` of it; sum of `L_c / D_c`;
+largest worker load. `objective: (kind: sum)` drops the two count tiers. The chosen plan
+is scored a second time with every operation at its p99 cost; that column is reported,
+never optimised.
 
 **Search.** Start from a list schedule on `cpus` (ready operations ordered by the slack of
 the tightest chain through them, first-fit by load). Moves: move an occurrence to another
 lane and position; swap two occurrences on a lane; change a worker's CPU or priority;
 give a stateless task's offsets different workers (`k = 2`); change `max_in_flight`.
-A move that breaks a required edge is rejected before simulation. Seeded, fixed budget,
+A move that breaks a required edge is rejected before scoring. Seeded, fixed budget,
 restarts; the best `N` plans with distinct scores are written. The proposer never claims
 optimality; the measurement step decides.
 
@@ -331,13 +321,12 @@ candidates, predictions, runs, score. A pass is repeatable from its directory.
 ## 9. Steps
 
 1. This document, reviewed.
-2. The plan format of §2: validation, export, `apply` writing pools; the serial subset
-   re-exports unchanged.
+2. The plan format of §2: validation and export; the serial subset re-exports unchanged.
 3. The executor (§3) with its determinism tests, then the same equality check on the
    flight controller example's replay tests.
 4. Profile and chain extraction in `cu29_export` (§4, §7) and the logreader subcommand.
-5. The proposer: analytical model, simulator, objective, search (§6), with tests that
-   reproduce the simulator's prediction on a plan the executor then runs.
+5. The proposer: the response-time model, objective and search (§6), with a test that
+   reproduces a published placement from its profile.
 6. Recipes (§8) and the Autoware Universe replica ported as an example (can start in
    parallel with steps 3 to 5); the first full pass runs on it.
 
@@ -348,4 +337,6 @@ pass.
 
 Refinement allocation for anytime tasks (the plan carries their phases as operations, but
 no quality model); accelerators; changing a plan at run time; `Sampled` background results
-as anything but an explicitly non-deterministic choice.
+as anything but an explicitly non-deterministic choice; a discrete-event simulation of a
+plan on the recorded firing sequence (a possible later predictor of typical latency, put
+aside for now).
