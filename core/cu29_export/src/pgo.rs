@@ -230,17 +230,21 @@ where
         let period_ns = f64::from(source.period_ms) * 1e6;
         let span_ns = span.map_or(0, |(first, last)| last - first) as f64;
         let expected = span_ns.max(window_ns as f64 - period_ns).max(0.0) / period_ns;
+        // A window shorter than one period cannot judge a source that fired.
+        let delivered_rate = if fired == 0 {
+            0.0
+        } else if expected < 1.0 {
+            1.0
+        } else {
+            (fired - 1) as f64 / expected
+        };
         profile.sources.insert(
             source.task.clone(),
             CuSourceProfile {
                 period_ms: source.period_ms,
                 fired,
                 expected,
-                delivered_rate: if expected > 0.0 && fired > 0 {
-                    (fired - 1) as f64 / expected
-                } else {
-                    0.0
-                },
+                delivered_rate,
             },
         );
     }

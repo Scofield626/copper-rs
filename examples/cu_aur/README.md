@@ -89,6 +89,11 @@ just import pgo/candidates/plan-1.ron     # -> copperconfig-pgo.ron
 just measure 10            # run that plan on the lane executor, extract its profile
 ```
 
+Because the roots fire on the grid, a source's delivered rate measures whether the
+executor held the grid. The serial executor does not at this scale — a CopperList
+carrying a whole sub-DAG chain overruns the 5ms slot — and the lane executor is what
+restores it.
+
 `pgo.ron` is the scheduling contract: the 18 chains with their deadlines, the 11 roots
 with their periods, the CPUs a candidate may use, and how candidates are ranked. The
 runtime macro reads its config at compile time, so running a candidate is a rebuild:

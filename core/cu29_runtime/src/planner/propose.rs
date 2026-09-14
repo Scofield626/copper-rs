@@ -117,6 +117,8 @@ struct Model {
     /// Per contract source: its occurrences.
     sources: Vec<Vec<usize>>,
     cpus: Vec<usize>,
+    /// CopperLists in flight at once, at least one cycle's worth.
+    max_in_flight: u32,
     policy: SchedulingPolicy,
     deadline_objective: bool,
     margin: f64,
@@ -254,8 +256,9 @@ impl Model {
             .iter()
             .map(|source| units_of(&source.task))
             .collect();
+        let copperlists_per_cycle = inventory.copperlists_per_cycle;
         Ok(Self {
-            cycle_ns: copperlist_ns * u64::from(inventory.copperlists_per_cycle),
+            cycle_ns: copperlist_ns * u64::from(copperlists_per_cycle),
             inventory,
             units,
             cost,
@@ -269,6 +272,7 @@ impl Model {
                 .collect(),
             sources,
             cpus: contract.cpus.clone(),
+            max_in_flight: contract.max_in_flight.max(copperlists_per_cycle),
             policy: contract.worker_policy,
             deadline_objective: contract.objective.kind == CuObjectiveKind::Deadline,
             margin: contract.objective.margin,
@@ -380,8 +384,22 @@ impl Model {
             chain_ratio.push(latency as f64 / deadline as f64);
         }
         // Admission is gated by the whole cycle: the slowest lane throttles
-        // every source, wherever the source itself runs.
-        let cycle_rate = rate.iter().copied().fold(1.0f64, f64::min);
+        // every source, wherever the source itself runs, and so does the
+        // cycle's critical path when fewer cycles than its length fit in
+        // flight (`max_in_flight` CopperLists over `k` per cycle).
+        let makespan = ends.iter().copied().max().unwrap_or(0);
+        let cycles_in_flight =
+            f64::from(self.max_in_flight) / f64::from(self.inventory.copperlists_per_cycle.max(1));
+        let pipelined = makespan as f64 / cycles_in_flight;
+        let cycle_rate =
+            rate.iter()
+                .copied()
+                .fold(1.0f64, f64::min)
+                .min(if pipelined <= period as f64 {
+                    1.0
+                } else {
+                    period as f64 / (pipelined + g as f64 / 2.0)
+                });
         let source_rate: Vec<f64> = self.sources.iter().map(|_| cycle_rate).collect();
         let rate_deficit: f64 = source_rate.iter().map(|&r| rate_deficit(r)).sum();
         let sum: f64 = chain_ratio.iter().sum();
@@ -464,7 +482,18 @@ fn first_unit_on_a_cycle(preds: &[Vec<usize>]) -> Option<usize> {
             }
         }
     }
-    (0..preds.len()).find(|&i| incoming[i] > 0)
+    // Every node left is on a cycle or downstream of one; strip the
+    // downstream ones (no remaining successor of theirs is itself left) so a
+    // cycle member is named.
+    let mut left: Vec<bool> = incoming.iter().map(|&n| n > 0).collect();
+    loop {
+        let stripped = (0..preds.len()).find(|&i| left[i] && succs[i].iter().all(|&s| !left[s]));
+        match stripped {
+            Some(i) => left[i] = false,
+            None => break,
+        }
+    }
+    (0..preds.len()).find(|&i| left[i])
 }
 
 /// A source within `RATE_TOLERANCE` of its period keeps its rate.
