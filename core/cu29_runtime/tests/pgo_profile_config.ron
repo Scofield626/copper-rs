@@ -5,8 +5,16 @@
         (id: "sink", type: "Sink"),
     ],
     cnx: [
-        (src: "src", dst: "work", msg: "u64"),
-        (src: "work", dst: "sink", msg: "u64"),
+        (
+            src: "src",
+            dst: "work",
+            msg: "u64",
+        ),
+        (
+            src: "work",
+            dst: "sink",
+            msg: "u64",
+        ),
     ],
     logging: (slab_size_mib: 16),
 )

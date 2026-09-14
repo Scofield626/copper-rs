@@ -5,7 +5,7 @@ use crate::copperlists_reader;
 use crate::logstats::graph_signature;
 use cu29::clock::Tov;
 use cu29::config::{CuConfig, DEFAULT_MISSION_ID};
-use cu29::curuntime::{CuExecutionUnit, CuStepPhase};
+use cu29::curuntime::{CuExecutionUnit, CuStepPhase, CuTaskType};
 use cu29::planner::{
     CuChainProfile, CuContract, CuCostStats, CuOperationProfile, CuProfile, CuSourceProfile,
     PlanEntityKind, assemble_runtime_plan_for_mission, step_key,
@@ -52,7 +52,29 @@ where
     let graph = config.get_graph(mission)?;
     let plan = assemble_runtime_plan_for_mission(config, graph, mission_id)?;
     // The key an origin's measured span belongs to: its first phase's step.
+    // A sink produces no payload, so it counts as fired when one of its
+    // inputs' producers fired in the same CopperList.
+    let origins = P::get_all_task_ids();
     let mut key_of_origin: HashMap<String, String> = HashMap::new();
+    let mut inputs_of_origin: HashMap<String, Vec<String>> = HashMap::new();
+    let mut producer_of_slot: HashMap<u32, String> = HashMap::new();
+    let origin_of = |entity: &cu29::planner::PlanEntity| match entity.kind {
+        PlanEntityKind::Task { .. } => entity.label.clone(),
+        PlanEntityKind::BridgeRx { .. } | PlanEntityKind::BridgeTx { .. } => {
+            format!("bridge::{}", entity.label)
+        }
+    };
+    for unit in &plan.execution.steps {
+        let CuExecutionUnit::Step(step) = unit else {
+            continue;
+        };
+        if let Some(output) = &step.output_msg_pack {
+            producer_of_slot.insert(
+                output.culist_index,
+                origin_of(&plan.entities[step.node_id as usize]),
+            );
+        }
+    }
     for unit in &plan.execution.steps {
         let CuExecutionUnit::Step(step) = unit else {
             continue;
@@ -61,17 +83,24 @@ where
             continue;
         }
         let entity = &plan.entities[step.node_id as usize];
-        let origin = match entity.kind {
-            PlanEntityKind::Task { .. } => entity.label.clone(),
-            PlanEntityKind::BridgeRx { .. } | PlanEntityKind::BridgeTx { .. } => {
-                format!("bridge::{}", entity.label)
-            }
-        };
+        let origin = origin_of(entity);
+        // Only operations with a CopperList slot are measured.
+        if !origins.contains(&origin.as_str()) {
+            continue;
+        }
+        if step.task_type == CuTaskType::Sink {
+            inputs_of_origin.insert(
+                origin.clone(),
+                step.input_msg_indices_types
+                    .iter()
+                    .filter_map(|input| producer_of_slot.get(&input.culist_index).cloned())
+                    .collect(),
+            );
+        }
         key_of_origin
             .entry(origin)
             .or_insert_with(|| step_key(mission_id, entity, step.phase, None));
     }
-    let origins = P::get_all_task_ids();
     let mut samples: BTreeMap<String, OperationSamples> = key_of_origin
         .values()
         .map(|key| (key.clone(), OperationSamples::default()))
@@ -92,6 +121,14 @@ where
         intervals.clear();
         for (msg, origin) in culist.msgs.cumsgs().iter().zip(origins.iter()) {
             record_interval(&mut intervals, origin, *msg);
+        }
+        for (sink, inputs) in &inputs_of_origin {
+            let fed = inputs
+                .iter()
+                .any(|input| intervals.get(input.as_str()).is_some_and(|i| i.fired));
+            if let Some(interval) = intervals.get_mut(sink.as_str()) {
+                interval.fired |= fed;
+            }
         }
         let mut cl_start = None;
         let mut cl_end = None;
@@ -125,7 +162,7 @@ where
             ) else {
                 continue;
             };
-            if !source.fired {
+            if !source.fired || !sink.fired {
                 continue;
             }
             let start = source.tov_ns.unwrap_or(source.start_ns);
@@ -143,8 +180,9 @@ where
     profile.copperlist_span = CuCostStats::from_samples(&mut spans);
     for (key, mut operation) in samples {
         let fired = CuCostStats::from_samples(&mut operation.fired);
-        let firing_rate_hz = if window_s > 0.0 {
-            fired.samples as f64 / window_s
+        // `n` firings span `n - 1` intervals of the window.
+        let firing_rate_hz = if window_s > 0.0 && fired.samples >= 2 {
+            (fired.samples - 1) as f64 / window_s
         } else {
             0.0
         };
@@ -171,7 +209,9 @@ where
     }
     for source in &contract.sources {
         let fired = source_fired[source.task.as_str()];
-        let expected = window_ns as f64 / (f64::from(source.period_ms) * 1e6);
+        // The window spans the intervals between firings, one fewer than
+        // the firings it can hold.
+        let expected = window_ns as f64 / (f64::from(source.period_ms) * 1e6) + 1.0;
         profile.sources.insert(
             source.task.clone(),
             CuSourceProfile {

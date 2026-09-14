@@ -5166,14 +5166,13 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                     // commit, after every occurrence completed.
                     let mut in_flight_boxes: Vec<Option<Box<CuList>>> =
                         (0..max_in_flight).map(|_| None).collect();
+                    let mut free_copperlists = free_copperlists;
                     let (done_tx, done_rx) =
                         std::sync::mpsc::channel::<#mission_mod::ParallelWorkerResult>();
                     let mut lane_handles = Vec::new();
                     #(#lane_worker_spawns)*
                     drop(done_tx);
 
-                    let mut in_flight_boxes = in_flight_boxes;
-                    let mut free_copperlists = free_copperlists;
                     // Every early return of the dispatch loop lands here, and the
                     // lanes are joined before any CopperList buffer is dropped.
                     let mut dispatch = |in_flight_boxes: &mut Vec<Option<Box<CuList>>>,
@@ -5215,7 +5214,12 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                                 .unwrap_or(true);
                             let keyframe_ready = #parallel_keyframe_ready;
 
+                            // CopperLists complete in any order, so the slot of
+                            // the next id must have been handed back, not just
+                            // the count.
+                            let slot = (next_clid % max_in_flight as u64) as usize;
                             if in_flight < max_in_flight
+                                && in_flight_boxes[slot].is_none()
                                 && rate_ready
                                 && keyframe_ready
                                 && !free_copperlists.is_empty()
@@ -5228,7 +5232,7 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                                 #parallel_keyframe_reset
                                 culist.change_state(cu29::copperlist::CopperListState::Processing);
                                 let culist_ptr = (&mut *culist as *mut CuList).cast::<u8>();
-                                in_flight_boxes[(clid % max_in_flight as u64) as usize] = Some(culist);
+                                in_flight_boxes[slot] = Some(culist);
                                 lanes.admit(clid, culist_ptr);
                                 next_launch_clid += 1;
                                 in_flight += 1;
@@ -5311,19 +5315,26 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                         #parallel_commit_tokens
                     }
 
-                    free_copperlists.extend(cl_manager.finish_pending_boxed()?);
+                    let pending = cl_manager.finish_pending_boxed();
                     if let Some(error) = fatal_error {
-                        Err(error)
-                    } else {
-                        Ok(())
+                        return Err(error);
                     }
+                    free_copperlists.extend(pending?);
+                    Ok(())
                     };
-                    let result = dispatch(&mut in_flight_boxes, &mut free_copperlists);
+                    // A panic in the dispatcher must not unwind past the lanes
+                    // while they still use the CopperList buffers.
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        dispatch(&mut in_flight_boxes, &mut free_copperlists)
+                    }));
                     lanes.request_shutdown();
                     for handle in lane_handles {
                         let _ = handle.join();
                     }
-                    result
+                    match result {
+                        Ok(result) => result,
+                        Err(payload) => std::panic::resume_unwind(payload),
+                    }
                 });
 
                 if result.is_err() {

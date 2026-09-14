@@ -140,10 +140,10 @@ fn profile_reports_operations_chains_and_source_rates() {
     assert!(work.firing_rate_hz > 0.0);
     let src = &profile.operations["mission:default|task:src|phase:whole"];
     assert_eq!(src.fired.samples, ITERATIONS / 2);
-    assert!(
-        profile
-            .operations
-            .contains_key("mission:default|task:sink|phase:whole")
+    let sink = &profile.operations["mission:default|task:sink|phase:whole"];
+    assert_eq!(
+        (sink.fired.samples, sink.skipped.samples),
+        (ITERATIONS / 2, ITERATIONS / 2)
     );
 
     let hot = &profile.chains["hot"];
@@ -155,7 +155,12 @@ fn profile_reports_operations_chains_and_source_rates() {
 
     let source = &profile.sources["src"];
     assert_eq!((source.period_ms, source.fired), (1, ITERATIONS / 2));
-    assert!(source.expected > 0.0 && source.delivered_rate > 0.0);
+    assert!(source.expected > 1.0 && source.delivered_rate > 0.0);
+    let firings = src.firing_rate_hz * profile.window_ns as f64 / 1e9;
+    assert!(
+        (firings - (ITERATIONS / 2 - 1) as f64).abs() < 1e-6,
+        "{firings}"
+    );
 
     let text = profile.serialize_ron().unwrap();
     assert_eq!(
