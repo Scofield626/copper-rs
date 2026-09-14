@@ -124,7 +124,8 @@ edges; worker threads take their CPU and policy from the plan.
 
 Validation requires every process step exactly once per CL offset, every
 occurrence assigned to exactly one worker, distinct worker ids and valid
-policies, `max_in_flight` within the preallocated CLs, one `background` entry
+policies, `max_in_flight` at least `copperlists_per_cycle` and within the
+preallocated CLs, one `background` entry
 per background task with a known pool, and no cycle among same-cycle
 dependency and worker-order edges. Message
 producers must finish before consumers; anytime base and refinement phases

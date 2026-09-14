@@ -5168,9 +5168,16 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                         (0..max_in_flight).map(|_| None).collect();
                     let (done_tx, done_rx) =
                         std::sync::mpsc::channel::<#mission_mod::ParallelWorkerResult>();
+                    let mut lane_handles = Vec::new();
                     #(#lane_worker_spawns)*
                     drop(done_tx);
 
+                    let mut in_flight_boxes = in_flight_boxes;
+                    let mut free_copperlists = free_copperlists;
+                    // Every early return of the dispatch loop lands here, and the
+                    // lanes are joined before any CopperList buffer is dropped.
+                    let mut dispatch = |in_flight_boxes: &mut Vec<Option<Box<CuList>>>,
+                                        free_copperlists: &mut Vec<Box<CuList>>| -> CuResult<()> {
                     let mut dispatch_limiter = runtime
                         .runtime_config
                         .rate_target_hz
@@ -5282,30 +5289,41 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                             Ok(worker_result) => worker_result,
                             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
                             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                                lanes.request_shutdown();
                                 return Err(CuError::from(
                                     "Lane worker disconnected unexpectedly",
                                 ));
                             }
                         };
+                        // A failed occurrence ends the run; its CopperList is
+                        // never complete, so its buffer stays untouched until
+                        // every lane has exited.
+                        if let Err(error) = worker_result.outcome {
+                            lanes.request_shutdown();
+                            stop_launching = true;
+                            fatal_error = Some(error);
+                            break;
+                        }
                         in_flight = in_flight.saturating_sub(1);
                         worker_result.culist =
                             in_flight_boxes[(worker_result.clid % max_in_flight as u64) as usize].take();
-                        if worker_result.outcome.is_err() {
-                            lanes.request_shutdown();
-                        }
                         pending_results.insert(worker_result.clid, worker_result);
 
                         #parallel_commit_tokens
                     }
 
-                    lanes.request_shutdown();
                     free_copperlists.extend(cl_manager.finish_pending_boxed()?);
                     if let Some(error) = fatal_error {
                         Err(error)
                     } else {
                         Ok(())
                     }
+                    };
+                    let result = dispatch(&mut in_flight_boxes, &mut free_copperlists);
+                    lanes.request_shutdown();
+                    for handle in lane_handles {
+                        let _ = handle.join();
+                    }
+                    result
                 });
 
                 if result.is_err() {
@@ -12223,7 +12241,13 @@ fn build_lane_executor_tokens(
                         break;
                     };
                     #(#waits)*
-                    let outcome: cu29::curuntime::ProcessStepResult = if lanes.is_aborted(clid) || lanes.is_shut_down() {
+                    // A shutdown means a CopperList will never be complete:
+                    // leave without counting this occurrence, so nothing
+                    // incomplete is committed.
+                    if lanes.is_shut_down() {
+                        break;
+                    }
+                    let outcome: cu29::curuntime::ProcessStepResult = if lanes.is_aborted(clid) {
                         Ok(cu29::curuntime::ProcessStepOutcome::Continue)
                     } else {
                         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -12315,19 +12339,29 @@ fn build_lane_executor_tokens(
                 let bridge_ptrs = bridge_ptrs;
                 let bridge_locks = std::sync::Arc::clone(&bridge_locks);
                 #keyframe_captures
-                scope.spawn(move || {
+                lane_handles.push(scope.spawn(move || {
                     let spec = #spec;
-                    if cu29::thread_pool::apply_current_thread_scheduling(&spec, 0).is_err() {
+                    let first_clid = lanes.first_clid();
+                    if let Err(error) = cu29::thread_pool::apply_current_thread_scheduling(&spec, 0) {
                         lanes.request_shutdown();
+                        let _ = done_tx.send(#mission_mod::ParallelWorkerResult {
+                            clid: first_clid,
+                            culist: None,
+                            outcome: Err(CuError::new_with_cause(
+                                &format!("Worker '{}' could not apply its placement", #worker_id),
+                                error,
+                            )),
+                            raw_payload_bytes: 0,
+                            handle_bytes: 0,
+                        });
                         return;
                     }
-                    let first_clid = lanes.first_clid();
                     let mut cycle: u64 = 0;
                     loop {
                         #(#blocks)*
                         cycle += 1;
                     }
-                });
+                }));
             }
         });
     }

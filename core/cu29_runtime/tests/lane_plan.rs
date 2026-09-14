@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// CopperLists each run records before it asks to stop.
 const RECORDED: u64 = 200;
 
+/// The sinks record into process-wide statics, so tests run one at a time.
+static TEST_LOCK: Mutex<()> = Mutex::new(());
 /// Every value that reached the sinks, per app, with its CopperList id.
 static SINK: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
 static SINK2: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
@@ -90,7 +92,7 @@ impl CuStatelessTask for Triple {
         let active = TRIPLE_ACTIVE.fetch_add(1, Ordering::SeqCst) + 1;
         TRIPLE_PEAK.fetch_max(active, Ordering::SeqCst);
         // Long enough for the other worker's invocation to overlap.
-        std::thread::sleep(std::time::Duration::from_micros(200));
+        std::thread::sleep(std::time::Duration::from_millis(1));
         output.set_payload(input.payload().unwrap() * 3);
         TRIPLE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
         Ok(())
@@ -126,6 +128,7 @@ impl CuTask for Join {
 pub struct Sink {
     stop_lane: bool,
     stop_after: u64,
+    fail_at: Option<u64>,
     seen: u64,
 }
 
@@ -140,11 +143,17 @@ impl CuSinkTask for Sink {
         Ok(Self {
             stop_lane: config.get::<String>("app")?.as_deref() == Some("lane"),
             stop_after: config.get::<u64>("stop_after")?.unwrap_or(u64::MAX),
+            fail_at: config.get::<u64>("fail_at")?,
             seen: 0,
         })
     }
 
     fn process(&mut self, ctx: &CuContext, input: &Self::Input<'_>) -> CuResult<()> {
+        // The default monitor ignores errors; a panic is caught per lane and
+        // ends the run.
+        if self.fail_at == Some(ctx.cl_id()) {
+            panic!("sink failed on purpose");
+        }
         SINK.lock()
             .unwrap()
             .push((ctx.cl_id(), *input.payload().unwrap()));
@@ -217,18 +226,23 @@ macro_rules! app_module {
             #[copper_runtime(config = $config)]
             struct App {}
 
+            #[allow(dead_code)]
             pub fn request_stop() {
                 App::request_stop();
             }
 
+            /// Runs the app until its sink asks to stop; returns what the
+            /// sinks saw and the payloads it recorded.
+            #[allow(dead_code)]
+            pub fn run(dir: &Path) -> (Sinks, Sinks, Recorded) {
+                let (result, sink, sink2, recorded) = run_checked(dir);
+                result.unwrap();
+                (sink, sink2, recorded)
+            }
+
+            /// Like `run`, returning the run's outcome instead of unwrapping it.
             #[allow(deprecated)] // `run()` until the sink stops it has no typed transition
-            pub fn run(
-                dir: &Path,
-            ) -> (
-                Vec<(u64, u64)>,
-                Vec<(u64, u64)>,
-                Vec<(u64, Vec<(String, String)>)>,
-            ) {
+            pub fn run_checked(dir: &Path) -> (CuResult<()>, Sinks, Sinks, Recorded) {
                 use cu29::prelude::app::CuApplication;
                 SINK.lock().unwrap().clear();
                 SINK2.lock().unwrap().clear();
@@ -239,25 +253,29 @@ macro_rules! app_module {
                     .build()
                     .unwrap();
                 app.start_all_tasks().unwrap();
-                app.run().unwrap();
+                let result = app.run();
                 app.stop_all_tasks().unwrap();
                 drop(app);
                 let sink = std::mem::take(&mut *SINK.lock().unwrap());
                 let sink2 = std::mem::take(&mut *SINK2.lock().unwrap());
                 let recorded = recorded_payloads::<default::CuStampedDataSet>(&log_base);
-                (sink, sink2, recorded)
+                (result, sink, sink2, recorded)
             }
         }
     };
 }
 
+type Sinks = Vec<(u64, u64)>;
+type Recorded = Vec<(u64, Vec<(String, String)>)>;
+
 app_module!(serial, "tests/lane_plan_serial.ron");
 app_module!(lane, "tests/lane_plan_multicore.ron");
+app_module!(failing, "tests/lane_plan_failing.ron");
 
 /// The payloads of the first `RECORDED` recorded CopperLists, keyed by the
 /// task that produced each slot: the two plans lay their slots out in
 /// different orders.
-fn recorded_payloads<P>(log_base: &Path) -> Vec<(u64, Vec<(String, String)>)>
+fn recorded_payloads<P>(log_base: &Path) -> Recorded
 where
     P: CopperListTuple + 'static,
 {
@@ -295,6 +313,9 @@ where
 
 #[test]
 fn lane_executor_records_the_serial_copperlists() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let (serial_sink, serial_sink2, serial) = serial::run(dir.path());
     let (lane_sink, lane_sink2, lane) = lane::run(dir.path());
@@ -323,4 +344,30 @@ fn lane_executor_records_the_serial_copperlists() {
 
     assert_eq!(serial.len() as u64, RECORDED);
     assert_eq!(serial, lane);
+}
+
+/// A failing occurrence ends the run with its error, and only complete
+/// CopperLists are recorded.
+#[test]
+fn lane_executor_reports_a_failed_step_and_records_only_complete_copperlists() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let (result, sink, _, recorded) = failing::run_checked(dir.path());
+    let error = result.expect_err("the sink fails at CopperList 50");
+    assert!(
+        error.to_string().contains("sink failed on purpose"),
+        "{error}"
+    );
+    assert!(sink.len() < 50 + 4, "{}", sink.len());
+    for (index, (clid, slots)) in recorded.iter().enumerate() {
+        assert_eq!(*clid, index as u64);
+        assert!(*clid < 50, "CopperList {clid} could not complete");
+        let join = slots.iter().find(|(origin, _)| origin == "join").unwrap();
+        assert!(
+            !join.1.is_empty(),
+            "CopperList {clid} was recorded incomplete"
+        );
+    }
 }

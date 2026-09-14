@@ -393,6 +393,12 @@ impl CuMissionPlan {
         if self.max_in_flight == 0 {
             return Err(CuError::from("max_in_flight must be positive"));
         }
+        if self.max_in_flight < self.copperlists_per_cycle {
+            return Err(CuError::from(format!(
+                "max_in_flight {} is smaller than copperlists_per_cycle {}; a worker could wait for a CopperList that is never admitted",
+                self.max_in_flight, self.copperlists_per_cycle
+            )));
+        }
         let storage = config
             .logging
             .as_ref()
@@ -763,7 +769,7 @@ mod tests {
     #[test]
     fn rejects_malformed_inventory_workers_and_dependencies() {
         let (config, plan) = pipeline();
-        for mutation in 0..14 {
+        for mutation in 0..15 {
             let mut invalid = plan.clone();
             let mission = invalid.missions.get_mut("default").unwrap();
             match mutation {
@@ -805,6 +811,9 @@ mod tests {
                 }
                 11 => {
                     mission.max_in_flight = 3;
+                }
+                13 => {
+                    mission.max_in_flight = 1;
                 }
                 12 => {
                     mission.dispatcher = Some(CuPlanThread {
