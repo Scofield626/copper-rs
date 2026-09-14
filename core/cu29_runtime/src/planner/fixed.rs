@@ -3,6 +3,9 @@
 use super::AssembledPlan;
 use super::CuMissionPlan;
 use super::FIXED_PLANNER;
+use super::LaneOccurrence;
+use super::LanePlan;
+use super::LaneWorker;
 use super::Linearity;
 use super::StepOrder;
 use super::assemble_from_order;
@@ -94,6 +97,11 @@ impl CuPlan {
     /// CPU availability, runtime memory sizing, execution times, and deadline
     /// feasibility are not properties checked by this structural validator.
     pub fn validate(&self, config: &CuConfig) -> CuResult<()> {
+        self.validate_orders(config).map(|_| ())
+    }
+
+    /// Validate and return each mission's topological inventory order.
+    fn validate_orders(&self, config: &CuConfig) -> CuResult<BTreeMap<String, Vec<usize>>> {
         self.check_version()?;
         let missions = mission_graphs(config);
         if !self.missions.keys().eq(missions.iter().map(|(id, _)| id)) {
@@ -101,6 +109,7 @@ impl CuPlan {
                 "Execution plan must contain exactly the configured missions",
             ));
         }
+        let mut orders = BTreeMap::new();
         for (mission, graph) in missions {
             let canonical = assemble_runtime_plan_with_planner(config, graph, &Linearity)?;
             let shape = PlanShape::new(
@@ -110,11 +119,12 @@ impl CuPlan {
                 &mission,
                 &self.concurrent_resources,
             )?;
-            self.missions[&mission]
+            let order = self.missions[&mission]
                 .validate(config, &shape)
                 .map_err(|e| CuError::from(format!("Plan for mission '{mission}': {e}")))?;
+            orders.insert(mission, order);
         }
-        Ok(())
+        Ok(orders)
     }
 
     /// Serialize a plan as human-editable RON. Graph legality is checked by
@@ -171,8 +181,8 @@ impl CuPlan {
 /// This consumes an already scheduled plan; [`super::CuPlanner`] remains the
 /// extension point for heuristics that choose a graph-node order. There is
 /// no runtime dispatcher, file I/O, or serialization on the execution path.
-/// Multicore plans may be validated and embedded, but runtime generation
-/// rejects them until an executor implements their placement and dependencies.
+/// A multicore plan is materialized with its `LanePlan` attached, for the
+/// lane executor to generate; the serial subset executes on the main thread.
 pub struct Fixed {
     plan: CuPlan,
 }
@@ -229,8 +239,11 @@ impl Fixed {
         graph: &CuGraph,
         mission: &str,
     ) -> CuResult<AssembledPlan> {
-        self.plan.validate(config)?;
-        let result = self.assemble_steps(config, graph, mission);
+        let orders = self
+            .plan
+            .validate(config)
+            .and_then(|()| self.plan.validate_orders(config))?;
+        let result = self.assemble_steps(config, graph, mission, &orders[mission]);
         result.map_err(|e| CuError::from(format!("Fixed plan for mission '{mission}': {e}")))
     }
 
@@ -239,13 +252,18 @@ impl Fixed {
         config: &CuConfig,
         graph: &CuGraph,
         mission: &str,
+        order: &[usize],
     ) -> CuResult<AssembledPlan> {
-        let requested = self
+        let plan = self
             .plan
             .missions
             .get(mission)
-            .ok_or_else(|| CuError::from("Missing mission"))?
-            .serial_keys()?;
+            .ok_or_else(|| CuError::from("Missing mission"))?;
+        let requested = if plan.is_serial() {
+            plan.serial_keys()?
+        } else {
+            plan.layout_keys(order)
+        };
         // The canonical expansion enumerates legal identities, independent of
         // the requested order. It is never substituted for the user's order.
         let canonical = assemble_runtime_plan_with_planner(config, graph, &Linearity)?;
@@ -280,6 +298,37 @@ impl Fixed {
                 })
             })
             .collect::<CuResult<Vec<_>>>()?;
+        assembled.background = plan.background.clone();
+        if !plan.is_serial() {
+            let step_of: BTreeMap<_, _> = requested
+                .iter()
+                .enumerate()
+                .map(|(index, key)| (key.as_str(), index))
+                .collect();
+            assembled.lanes = Some(LanePlan {
+                copperlists_per_cycle: plan.copperlists_per_cycle,
+                max_in_flight: plan.max_in_flight,
+                occurrences: plan
+                    .steps
+                    .iter()
+                    .map(|step| LaneOccurrence {
+                        step: step_of[step.key.as_str()],
+                        copperlist: step.copperlist,
+                    })
+                    .collect(),
+                workers: plan
+                    .workers
+                    .iter()
+                    .map(|worker| LaneWorker {
+                        id: worker.id.clone(),
+                        placement: worker.placement.clone(),
+                        occurrences: worker.steps.iter().map(|&i| i as usize).collect(),
+                    })
+                    .collect(),
+                dispatcher: plan.dispatcher.clone(),
+                dependencies: plan.dependencies.clone(),
+            });
+        }
         Ok(assembled)
     }
 }

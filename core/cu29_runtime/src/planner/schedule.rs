@@ -384,7 +384,9 @@ impl CuMissionPlan {
             .collect()
     }
 
-    pub(super) fn validate(&self, config: &CuConfig, shape: &PlanShape) -> CuResult<()> {
+    /// Validates and returns a topological order of the inventory over
+    /// zero-lag dependency and worker-order edges.
+    pub(super) fn validate(&self, config: &CuConfig, shape: &PlanShape) -> CuResult<Vec<usize>> {
         if self.copperlists_per_cycle == 0 {
             return Err(CuError::from("copperlists_per_cycle must be positive"));
         }
@@ -583,7 +585,18 @@ impl CuMissionPlan {
                 require(last.1, first.0, 1)?;
             }
         }
-        Ok(())
+        Ok(order)
+    }
+
+    /// The process-step keys of CopperList offset 0 in topological order: a
+    /// serial order every per-CL constraint accepts, used for the slot layout.
+    pub(super) fn layout_keys(&self, order: &[usize]) -> Vec<String> {
+        order
+            .iter()
+            .map(|&index| &self.steps[index])
+            .filter(|step| step.copperlist == 0)
+            .map(|step| step.key.clone())
+            .collect()
     }
 }
 
@@ -655,6 +668,7 @@ mod tests {
     use super::*;
     use crate::planner::CuPlan;
     use crate::planner::Fixed;
+    use crate::planner::LaneOccurrence;
     use crate::planner::assemble_runtime_plan_for_mission;
 
     fn chain() -> CuConfig {
@@ -714,7 +728,7 @@ mod tests {
     }
 
     #[test]
-    fn multicore_multicl_plan_round_trips_but_is_not_silently_executed_serially() {
+    fn multicore_multicl_plan_round_trips_and_resolves_to_a_lane_plan() {
         let (mut config, plan) = pipeline();
         plan.validate(&config).unwrap();
         let loaded = CuPlan::deserialize_ron(&plan.serialize_ron().unwrap()).unwrap();
@@ -722,15 +736,28 @@ mod tests {
         Fixed::new(loaded).unwrap().apply(&mut config).unwrap();
         let config = CuConfig::deserialize_ron(&config.serialize_ron().unwrap()).unwrap();
         assert_eq!(CuPlan::from_config(&config).unwrap(), plan);
-        let err =
+        let assembled =
             assemble_runtime_plan_for_mission(&config, config.get_graph(None).unwrap(), "default")
-                .err()
                 .unwrap();
-        assert!(
-            err.to_string()
-                .contains("requires a multicore/multi-CopperList executor"),
-            "{err}"
+        // One materialized step per key, in an order the per-CL edges accept.
+        assert_eq!(
+            execution_keys(&assembled, "default").unwrap(),
+            [
+                "mission:default|task:src|phase:whole",
+                "mission:default|task:sink|phase:whole"
+            ]
         );
+        let lanes = assembled.lanes.unwrap();
+        assert_eq!((lanes.copperlists_per_cycle, lanes.max_in_flight), (2, 2));
+        assert_eq!(
+            lanes.occurrences,
+            [(0, 0), (1, 0), (0, 1), (1, 1)]
+                .map(|(step, copperlist)| LaneOccurrence { step, copperlist })
+        );
+        assert_eq!(lanes.workers.len(), 2);
+        assert_eq!(lanes.workers[1].occurrences, [1, 3]);
+        assert_eq!(lanes.dependencies.len(), 2);
+        assert!(lanes.dispatcher.is_some());
     }
 
     #[test]

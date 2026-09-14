@@ -1,10 +1,27 @@
 (
     tasks: [
-        (id: "src", type: "IntSource", kind: source),
-        (id: "features", type: "Features", kind: stateless_task, background: true),
+        (
+            id: "src",
+            type: "IntSource",
+            kind: source,
+        ),
+        (
+            id: "features",
+            type: "Features",
+            kind: stateless_task,
+            background: true,
+        ),
     ],
     cnx: [
-        (src: "src", dst: "features", msg: "i32"),
-        (src: "features", dst: "__nc__", msg: "i32"),
+        (
+            src: "src",
+            dst: "features",
+            msg: "i32",
+        ),
+        (
+            src: "features",
+            dst: "__nc__",
+            msg: "i32",
+        ),
     ],
 )

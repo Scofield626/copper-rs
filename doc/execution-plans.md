@@ -7,11 +7,14 @@ happen at compile time or in offline tools.
 
 `Linearity` chooses a node order; `Pinned` accepts a task order and lets Copper
 place bridge stages and foreground anytime refinements. `Fixed` consumes an
-already scheduled plan. This PR supports **representation and validation** of
-multicore plans; fixed execution supports one main worker and one CopperList per
-cycle. Multicore execution and new scheduling heuristics are subsequent work.
-Unsupported execution fails compilation, including use with `parallel-rt`;
-placement and dependencies are never silently discarded.
+already scheduled plan. A serial plan (one main-thread worker, one CopperList
+per cycle, one in flight) runs on the main thread. A multicore plan runs on the
+lane executor, which the `parallel-rt` feature provides: one thread per worker
+with the plan's CPU and policy, CopperLists admitted up to `max_in_flight` and
+committed in id order, keyframes captured by each component inside its own
+step. Without the feature a multicore plan fails compilation; placement and
+dependencies are never silently discarded. `App::request_stop()` ends a run at
+the next cycle boundary.
 
 ## Workflow
 
@@ -34,13 +37,13 @@ just plan-import copperconfig.ron candidate.ron copperconfig-fixed.ron
 ```
 
 Import validates and embeds the supplied plan as the `plan` parameter of
-`runtime.planner` with `type: "cu29::planner::Fixed"`. It supports saving valid
-multicore configurations for the future executor. To execute a supported serial
-plan, point the runtime macro, logreader's `gen_cumsgs!`, and replay macro at the
-resulting config and rebuild. Alternatively, replace the original config with
-the reviewed result. A startup config change cannot change compiled execution.
-`just plan config=copperconfig-fixed.ron` renders a supported serial plan;
-multicore visualization is not implemented by that serial visualizer.
+`runtime.planner` with `type: "cu29::planner::Fixed"`. To execute the plan,
+point the runtime macro, logreader's `gen_cumsgs!`, and replay macro at the
+resulting config and rebuild (with the `parallel-rt` feature for a multicore
+plan). Alternatively, replace the original config with the reviewed result. A
+startup config change cannot change compiled execution.
+`just plan config=copperconfig-fixed.ron` renders the plan's slot layout as a
+serial sequence; it does not draw workers.
 
 Import flattens the effective configuration, including selected fragments.
 Pass the active Cargo features as the recipe's final argument when needed.
@@ -161,11 +164,12 @@ This structural validator does not prove timing/deadline feasibility, bounded
 buffer feasibility, OS CPU availability, or contention safety for arbitrary
 shared resources and asynchronous background jobs. Background steps describe
 poll/dispatch gateways; completion of the external job retains its existing
-semantics. Runtime memory sizing and execution support for multicore plans
-belong with the future executor.
+semantics. The executor checks at build time that `logging.keyframe_interval`
+is at least `max_in_flight`, so a keyframe never delays an admission.
 
-For supported serial plans, Copper regenerates typed message slots from the
-chosen order while preserving RON connection order within each input tuple.
+Copper regenerates typed message slots from the plan (a serial plan's order, or
+a multicore plan's topological order) while preserving RON connection order
+within each input tuple.
 Existing error handling and anytime budget/skip behavior still apply; fixing
 phase order does not force optional refinements to run.
 No plan parsing, lookup, or serialization is added to the execution path.

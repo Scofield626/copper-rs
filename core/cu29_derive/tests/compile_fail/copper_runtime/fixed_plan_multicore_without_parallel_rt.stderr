@@ -1,0 +1,7 @@
+error: Mission 'default': this plan requires a multicore/multi-CopperList executor. Enable the parallel-rt feature; placement and dependencies will not be ignored.
+  --> tests/compile_fail/copper_runtime/fixed_plan_multicore_without_parallel_rt.rs:43:1
+   |
+43 | #[copper_runtime(config = "config/fixed_plan_multicore.ron")]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `copper_runtime` (in Nightly builds, run with -Z macro-backtrace for more info)

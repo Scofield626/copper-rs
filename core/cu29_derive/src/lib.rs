@@ -19,6 +19,7 @@ use crate::utils::{config_id_to_bridge_const, config_id_to_enum, config_id_to_st
 use cu29_build::COPPER_CFG_FEATURES_ENV;
 use cu29_runtime::config::CuConfig;
 use cu29_runtime::config::DEFAULT_MISSION_ID;
+use cu29_runtime::config::SchedulingPolicy;
 use cu29_runtime::config::{
     AnytimeConfig, BridgeChannelConfigRepresentation, ConfigGraphs, ConstantConfig, ConstantNumber,
     ConstantStorage, CuGraph, Flavor, HandleContent, Node, NodeId, RT_POOL, ResourceBundleConfig,
@@ -29,7 +30,8 @@ use cu29_runtime::curuntime::{
     find_task_type_for_id,
 };
 use cu29_runtime::planner::{
-    BUILTIN_PLANNERS, DEFAULT_COPPERLIST_COUNT, PLAN_ARTIFACT_FILE, PlanEntityKind,
+    BUILTIN_PLANNERS, CuPlanBackground, CuPlanBackgroundResult, CuPlanPlacement, CuPlanThread,
+    DEFAULT_COPPERLIST_COUNT, LanePlan, PLAN_ARTIFACT_FILE, PlanEntityKind,
     assemble_runtime_plan_for_mission, config_digest, is_builtin_planner, read_plan_artifact,
 };
 use cu29_traits::{CuError, CuResult};
@@ -1935,13 +1937,6 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
         return return_error(e.to_string());
     }
     let copper_config = copper_config;
-    if parallel_rt_enabled
-        && copper_config
-            .planner_config()
-            .is_some_and(|planner| planner.get_type() == "cu29::planner::Fixed")
-    {
-        return return_error("Fixed plans currently require the serial executor. Disable parallel-rt; multicore plan execution is not implemented and the supplied placement will not be ignored.".to_string());
-    }
     if copper_config.log_streaming.is_some() && !logstream_enabled {
         return return_error(
             "copperconfig.ron declares log_streaming but the cu29 'logstream' feature is disabled"
@@ -2166,8 +2161,13 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
         let culist_channel_usage = collect_bridge_channel_usage(graph);
         let mut culist_bridge_specs =
             build_bridge_specs(&copper_config, graph, &culist_channel_usage);
-        let (culist_plan, culist_exec_entities, culist_plan_to_original) =
-            match build_execution_plan(&copper_config, graph, mission, &mut culist_bridge_specs) {
+        let (culist_plan, culist_exec_entities, culist_plan_to_original, culist_schedule) =
+            match build_execution_plan_with_schedule(
+                &copper_config,
+                graph,
+                mission,
+                &mut culist_bridge_specs,
+            ) {
                 Ok(plan) => plan,
                 Err(e) => {
                     return return_error(format!(
@@ -2175,6 +2175,58 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                     ));
                 }
             };
+        // A multicore plan needs the lane executor; a serial fixed plan must
+        // not run through the stage pipeline, which would ignore its
+        // placement and its in-flight bound.
+        let lane_plan = culist_schedule.lanes;
+        if !sim_mode && lane_plan.is_some() && !(std && parallel_rt_enabled) {
+            return return_error(format!(
+                "Mission '{mission}': this plan requires a multicore/multi-CopperList executor. Enable the parallel-rt feature; placement and dependencies will not be ignored."
+            ));
+        }
+        // A serial fixed plan places its single worker on the main thread, so
+        // the stage pipeline is not used for it even with parallel-rt enabled.
+        let fixed_serial_plan = lane_plan.is_none()
+            && copper_config
+                .planner_config()
+                .is_some_and(|planner| planner.get_type() == "cu29::planner::Fixed");
+        // The keyframe manager captures one CopperList at a time, so a
+        // keyframe must never be due while another is in flight: that would
+        // delay an admission instead of capturing in the flow.
+        if let Some(lanes) = &lane_plan
+            && keyframe_logging_enabled
+        {
+            let interval = copper_config
+                .logging
+                .as_ref()
+                .and_then(|logging| logging.keyframe_interval)
+                .unwrap_or(cu29_runtime::config::DEFAULT_KEYFRAME_INTERVAL);
+            if interval < lanes.max_in_flight {
+                return return_error(format!(
+                    "Mission '{mission}': logging.keyframe_interval ({interval}) is smaller than the plan's max_in_flight ({}); a keyframe would delay CopperList admission. Raise the interval or lower max_in_flight.",
+                    lanes.max_in_flight
+                ));
+            }
+        }
+        let mut task_specs = task_specs;
+        for entry in &culist_schedule.background {
+            let Some(index) = task_specs.ids.iter().position(|id| *id == entry.task) else {
+                return return_error(format!(
+                    "Mission '{mission}': background plan entry names unknown task '{}'",
+                    entry.task
+                ));
+            };
+            if let CuPlanBackgroundResult::Lag { lag } = entry.result {
+                if lag != 1 || entry.max_running != 1 {
+                    return return_error(format!(
+                        "Mission '{mission}': background task '{}' asks for result lag {lag} with max_running {}; this runtime implements lag 1 with max_running 1.",
+                        entry.task, entry.max_running
+                    ));
+                }
+                task_specs.background_result_lags[index] = Some(lag);
+            }
+        }
+        let task_specs = task_specs;
 
         // Single-input/single-output arity is validated at configuration time
         // (config.rs validate_anytime_graph), before the plan is built.
@@ -3596,7 +3648,8 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
         preprocess_calls.extend(task_preprocess_calls);
         let mut postprocess_calls = task_postprocess_calls;
         postprocess_calls.extend(bridge_postprocess_calls);
-        let parallel_rt_run_supported = std && parallel_rt_enabled && !sim_mode;
+        let parallel_rt_run_supported =
+            std && parallel_rt_enabled && !sim_mode && !fixed_serial_plan;
 
         let output_pack_sizes = collect_output_pack_sizes(&culist_plan);
         let runtime_plan_code_and_logging: Vec<(
@@ -3900,6 +3953,7 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                                         parallel_lifecycle_placements
                                             .as_ref()
                                             .expect("parallel lifecycle placements missing")[step_index],
+                                        false,
                                     );
                                     let job_local = anytime_job_local_tokens(&task_specs, *task_index);
                                     let body = quote! {
@@ -3930,10 +3984,22 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                                             .expect("parallel lifecycle placements missing")[step_index],
                                         true,
                                     ),
-                                    TaskExecutionTokens::new(quote! {
-                                        let _task_lock = step_rt.task_locks.#task_index_ts.lock().expect("parallel task lock poisoned");
-                                        let task = unsafe { step_rt.task_ptrs.#task_index_ts.as_mut() };
-                                    }, quote! { (*task) }),
+                                    TaskExecutionTokens::new(
+                                        if task_specs.stateless_flags[*task_index] {
+                                            // Shared access: workers may run
+                                            // different CopperLists of a
+                                            // stateless task at the same time.
+                                            quote! {
+                                                let task = unsafe { step_rt.task_ptrs.#task_index_ts.as_ref() };
+                                            }
+                                        } else {
+                                            quote! {
+                                                let _task_lock = step_rt.task_locks.#task_index_ts.lock().expect("parallel task lock poisoned");
+                                                let task = unsafe { step_rt.task_ptrs.#task_index_ts.as_mut() };
+                                            }
+                                        },
+                                        quote! { (*task) },
+                                    ),
                                 ))
                             }
                             ExecutionEntityKind::BridgeRx {
@@ -4783,9 +4849,11 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
 
         let kill_handler = if std && signal_handler {
             Some(quote! {
-                ctrlc::set_handler(move || {
-                    STOP_FLAG.store(true, Ordering::SeqCst);
-                }).expect("Error setting Ctrl-C handler");
+                cu29::curuntime::register_stop_flag(&#mission_mod::STOP_FLAG);
+                cu29::curuntime::ensure_stop_handler(|| {
+                    ctrlc::set_handler(cu29::curuntime::request_stop_all)
+                        .expect("Error setting Ctrl-C handler");
+                });
             })
         } else {
             None
@@ -4827,7 +4895,7 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                         rate_limiter.limit(self.copper_runtime.clock_ref());
                     }
 
-                    if STOP_FLAG.load(Ordering::SeqCst) || result.is_err() {
+                    if #mission_mod::STOP_FLAG.load(Ordering::SeqCst) || result.is_err() {
                         break result;
                     }
                 }
@@ -4849,7 +4917,7 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                         rate_limiter.limit(self.copper_runtime.clock_ref());
                     }
 
-                    if STOP_FLAG.load(Ordering::SeqCst) || result.is_err() {
+                    if #mission_mod::STOP_FLAG.load(Ordering::SeqCst) || result.is_err() {
                         break result;
                     }
                 }
@@ -4910,12 +4978,345 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
             }
         });
 
+        // Ordered commit of one finished CopperList: monitor, logging,
+        // keyframe end, recycle. Shared by the stage pipeline and the lane
+        // executor; `worker_result` owns the list at this point.
+        let parallel_commit_tokens = quote! {
+                        while let Some(worker_result) = pending_results.remove(&next_commit_clid) {
+                            if fatal_error.is_none()
+                                && parallel_rt.current_commit_clid() != worker_result.clid
+                            {
+                                shutdown.store(true, Ordering::Release);
+                                fatal_error = Some(CuError::from(format!(
+                                    "Parallel commit checkpoint out of sync: expected {}, got {}",
+                                    parallel_rt.current_commit_clid(),
+                                    worker_result.clid
+                                )));
+                                stop_launching = true;
+                            }
+
+                            let mut worker_result = worker_result;
+                            if fatal_error.is_none() {
+                                match worker_result.outcome {
+                                    Ok(cu29::curuntime::ProcessStepOutcome::AbortCopperList) => {
+                                        let mut culist = worker_result
+                                            .culist
+                                            .take()
+                                            .expect("parallel abort result missing CopperList ownership");
+                                        let mut commit_ctx = cu29::context::CuContext::from_runtime_metadata(
+                                            clock.clone(),
+                                            worker_result.clid,
+                                            instance_id,
+                                            subsystem_code,
+                                            #mission_mod::TASK_IDS,
+                                        );
+                                        commit_ctx.clear_current_component();
+                                        commit_ctx.clear_current_task();
+                                        let monitor_result = monitor.process_copperlist(
+                                            &commit_ctx,
+                                            #mission_mod::MONITOR_LAYOUT.view(&#mission_mod::collect_metadata(&culist)),
+                                        );
+                                        match cl_manager.end_of_processing_boxed(culist)? {
+                                            cu29::curuntime::OwnedCopperListSubmission::Recycled(culist) => {
+                                                free_copperlists.push(culist);
+                                            }
+                                            cu29::curuntime::OwnedCopperListSubmission::Pending => {}
+                                        }
+                                        monitor_result?;
+                                    }
+                                    Ok(cu29::curuntime::ProcessStepOutcome::Continue) => {
+                                        let mut culist = worker_result
+                                            .culist
+                                            .take()
+                                            .expect("parallel worker result missing CopperList ownership");
+                                        let mut commit_ctx = cu29::context::CuContext::from_runtime_metadata(
+                                            clock.clone(),
+                                            worker_result.clid,
+                                            instance_id,
+                                            subsystem_code,
+                                            #mission_mod::TASK_IDS,
+                                        );
+                                        commit_ctx.clear_current_component();
+                                        commit_ctx.clear_current_task();
+                                        let monitor_result = monitor.process_copperlist(
+                                            &commit_ctx,
+                                            #mission_mod::MONITOR_LAYOUT.view(&#mission_mod::collect_metadata(&culist)),
+                                        );
+
+                                        #(#preprocess_logging_calls)*
+
+                                        match cl_manager.end_of_processing_boxed(culist)? {
+                                            cu29::curuntime::OwnedCopperListSubmission::Recycled(culist) => {
+                                                free_copperlists.push(culist);
+                                            }
+                                            cu29::curuntime::OwnedCopperListSubmission::Pending => {}
+                                        }
+                                        let (keyframe_bytes, dropped_keyframes_total) = #parallel_keyframe_finish;
+                                        monitor_result?;
+                                        let stats = cu29::monitoring::CopperListIoStats {
+                                            raw_culist_bytes: core::mem::size_of::<CuList>() as u64
+                                                + cl_manager.last_handle_bytes,
+                                            handle_bytes: cl_manager.last_handle_bytes,
+                                            encoded_culist_bytes: cl_manager.last_encoded_bytes,
+                                            keyframe_bytes,
+                                            structured_log_bytes_total: ::cu29::prelude::structured_log_bytes_total(),
+                                            culistid: worker_result.clid,
+                                            dropped_copperlists_total: cl_manager.dropped_copperlists_total(),
+                                            dropped_keyframes_total,
+                                        };
+                                        monitor.observe_copperlist_io(stats);
+
+                                        // Postprocess, when present, now runs inside the owning
+                                        // component stage instead of on the ordered commit path.
+                                    }
+                                    Err(error) => {
+                                        shutdown.store(true, Ordering::Release);
+                                        stop_launching = true;
+                                        fatal_error = Some(error);
+                                        if let Some(mut culist) = worker_result.culist.take() {
+                                            culist.change_state(cu29::copperlist::CopperListState::Free);
+                                            free_copperlists.push(culist);
+                                        }
+                                    }
+                                }
+                            } else if let Some(mut culist) = worker_result.culist.take() {
+                                culist.change_state(cu29::copperlist::CopperListState::Free);
+                                free_copperlists.push(culist);
+                            }
+
+                            #parallel_keyframe_clear
+                            parallel_rt.release_commit(worker_result.clid + 1);
+                            next_commit_clid += 1;
+                        }
+        };
+
         #[cfg(feature = "macro_debug")]
         eprintln!("[build the run methods]");
-        let run_body: proc_macro2::TokenStream = if parallel_rt_run_supported {
+        let lane_rt_run_supported = parallel_rt_run_supported && lane_plan.is_some();
+        let lane_executor_tokens = if lane_rt_run_supported {
+            match build_lane_executor_tokens(
+                lane_plan.as_ref().expect("lane plan"),
+                &culist_plan,
+                &parallel_process_step_idents,
+                &mission_mod,
+                &parallel_worker_keyframe_captures,
+                &parallel_step_keyframe_fields,
+            ) {
+                Ok(tokens) => Some(tokens),
+                Err(e) => return return_error(format!("Mission '{mission}': {e}")),
+            }
+        } else {
+            None
+        };
+        let run_body: proc_macro2::TokenStream = if let Some(lane) = lane_executor_tokens {
+            let LaneExecutorTokens {
+                worker_spawns: lane_worker_spawns,
+                dispatcher_scheduling: lane_dispatcher_scheduling,
+                occurrences: lane_occurrences_lit,
+                occurrences_per_copperlist: lane_occurrences_per_cl_lit,
+                copperlists_per_cycle: lane_k_lit,
+                max_in_flight: lane_max_in_flight_lit,
+            } = lane;
             quote! {
-                static STOP_FLAG: AtomicBool = AtomicBool::new(false);
+                #kill_handler
 
+                <Self as #app_trait<S, L>>::start_all_tasks(self)?;
+                #lane_dispatcher_scheduling
+                let result = std::thread::scope(|scope| -> CuResult<()> {
+                    #mission_mod::assert_parallel_rt_send_bounds();
+
+                    let runtime = &mut self.copper_runtime;
+                    let clock_handle = runtime.clock();
+                    let clock = &clock_handle;
+                    let instance_id = runtime.instance_id();
+                    let subsystem_code = runtime.subsystem_code();
+                    let execution_probe = runtime.execution_probe.as_ref();
+                    let monitor = &runtime.monitor;
+                    let cl_manager = &mut runtime.copperlists_manager;
+                    let parallel_rt = &runtime.parallel_rt;
+                    let execution_probe_ptr =
+                        #mission_mod::ParallelSharedPtr::from_ref(execution_probe as *const _);
+                    let monitor_ptr =
+                        #mission_mod::ParallelSharedPtr::from_ref(monitor as *const _);
+                    let task_ptrs: #mission_mod::ParallelTaskPtrs = #parallel_task_ptr_values;
+                    let task_locks = std::sync::Arc::new(#parallel_task_lock_values);
+                    let bridge_ptrs: #mission_mod::ParallelBridgePtrs = #parallel_bridge_ptr_values;
+                    let bridge_locks = std::sync::Arc::new(#parallel_bridge_lock_values);
+                    #parallel_keyframe_runtime
+                    let mut free_copperlists =
+                        cu29::curuntime::allocate_boxed_copperlists::<CuStampedDataSet, #copperlist_count_tokens>();
+                    let start_clid = cl_manager.next_cl_id();
+                    parallel_rt.reset_cursors(start_clid);
+                    debug_assert_eq!(parallel_rt.metadata().process_stage_count(), #parallel_process_stage_count_tokens);
+                    // Set by the commit path on a fatal error; lanes stop through
+                    // the executor's own flag.
+                    let shutdown = std::sync::Arc::new(AtomicBool::new(false));
+
+                    let max_in_flight: usize = #lane_max_in_flight_lit;
+                    let copperlists_per_cycle: u64 = #lane_k_lit;
+                    let lanes = std::sync::Arc::new(cu29::parallel_rt::LaneExecutor::new(
+                        start_clid,
+                        #lane_occurrences_lit,
+                        max_in_flight,
+                        #lane_occurrences_per_cl_lit,
+                        #lane_k_lit,
+                    ));
+                    // The buffers of admitted CopperLists, indexed by slot; a lane
+                    // holds only a pointer and the dispatcher takes the box back at
+                    // commit, after every occurrence completed.
+                    let mut in_flight_boxes: Vec<Option<Box<CuList>>> =
+                        (0..max_in_flight).map(|_| None).collect();
+                    let (done_tx, done_rx) =
+                        std::sync::mpsc::channel::<#mission_mod::ParallelWorkerResult>();
+                    #(#lane_worker_spawns)*
+                    drop(done_tx);
+
+                    let mut dispatch_limiter = runtime
+                        .runtime_config
+                        .rate_target_hz
+                        .map(|rate| cu29::curuntime::LoopRateLimiter::from_rate_target_hz(rate, clock))
+                        .transpose()?;
+                    let mut in_flight = 0usize;
+                    let mut stop_launching = false;
+                    let mut next_launch_clid = start_clid;
+                    let mut next_commit_clid = start_clid;
+                    let mut pending_results =
+                        std::collections::BTreeMap::<u64, #mission_mod::ParallelWorkerResult>::new();
+                    #parallel_active_keyframe
+                    let mut fatal_error: Option<CuError> = None;
+
+                    loop {
+                        while let Some(recycled_culist) = cl_manager.try_reclaim_boxed()? {
+                            free_copperlists.push(recycled_culist);
+                        }
+
+                        // Stop only at a cycle boundary, so every admitted cycle is
+                        // complete and every lane can finish it.
+                        if #mission_mod::STOP_FLAG.load(Ordering::SeqCst)
+                            && !stop_launching
+                            && (next_launch_clid - start_clid).is_multiple_of(copperlists_per_cycle)
+                        {
+                            stop_launching = true;
+                            lanes.stop_admitting();
+                        }
+
+                        if !stop_launching && fatal_error.is_none() {
+                            let next_clid = next_launch_clid;
+                            let rate_ready = dispatch_limiter
+                                .as_ref()
+                                .map(|limiter| limiter.is_ready(clock))
+                                .unwrap_or(true);
+                            let keyframe_ready = #parallel_keyframe_ready;
+
+                            if in_flight < max_in_flight
+                                && rate_ready
+                                && keyframe_ready
+                                && !free_copperlists.is_empty()
+                            {
+                                let mut culist = free_copperlists
+                                    .pop()
+                                    .expect("lane CopperList pool unexpectedly empty");
+                                let clid = next_clid;
+                                culist.reset_for_runtime_use(clid);
+                                #parallel_keyframe_reset
+                                culist.change_state(cu29::copperlist::CopperListState::Processing);
+                                let culist_ptr = (&mut *culist as *mut CuList).cast::<u8>();
+                                in_flight_boxes[(clid % max_in_flight as u64) as usize] = Some(culist);
+                                lanes.admit(clid, culist_ptr);
+                                next_launch_clid += 1;
+                                in_flight += 1;
+                                if let Some(limiter) = dispatch_limiter.as_mut() {
+                                    limiter.mark_tick(clock);
+                                }
+                                continue;
+                            }
+                        }
+
+                        if in_flight == 0 {
+                            if stop_launching || fatal_error.is_some() {
+                                break;
+                            }
+
+                            if free_copperlists.is_empty() {
+                                free_copperlists.push(cl_manager.wait_reclaim_boxed()?);
+                                continue;
+                            }
+
+                            if let Some(limiter) = dispatch_limiter.as_ref()
+                                && !limiter.is_ready(clock)
+                            {
+                                limiter.wait_until_ready(clock);
+                                continue;
+                            }
+                        }
+
+                        // After a fatal error the lanes have exited; nothing more
+                        // will complete.
+                        if fatal_error.is_some() {
+                            break;
+                        }
+
+                        let recv_result = if !stop_launching {
+                            if let Some(limiter) = dispatch_limiter.as_ref() {
+                                if let Some(remaining) = limiter.remaining(clock)
+                                    && in_flight > 0
+                                {
+                                    done_rx.recv_timeout(std::time::Duration::from(remaining))
+                                } else {
+                                    done_rx
+                                        .recv()
+                                        .map_err(|_| std::sync::mpsc::RecvTimeoutError::Disconnected)
+                                }
+                            } else {
+                                done_rx
+                                    .recv()
+                                    .map_err(|_| std::sync::mpsc::RecvTimeoutError::Disconnected)
+                            }
+                        } else {
+                            done_rx
+                                .recv()
+                                .map_err(|_| std::sync::mpsc::RecvTimeoutError::Disconnected)
+                        };
+
+                        let mut worker_result = match recv_result {
+                            Ok(worker_result) => worker_result,
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                lanes.request_shutdown();
+                                return Err(CuError::from(
+                                    "Lane worker disconnected unexpectedly",
+                                ));
+                            }
+                        };
+                        in_flight = in_flight.saturating_sub(1);
+                        worker_result.culist =
+                            in_flight_boxes[(worker_result.clid % max_in_flight as u64) as usize].take();
+                        if worker_result.outcome.is_err() {
+                            lanes.request_shutdown();
+                        }
+                        pending_results.insert(worker_result.clid, worker_result);
+
+                        #parallel_commit_tokens
+                    }
+
+                    lanes.request_shutdown();
+                    free_copperlists.extend(cl_manager.finish_pending_boxed()?);
+                    if let Some(error) = fatal_error {
+                        Err(error)
+                    } else {
+                        Ok(())
+                    }
+                });
+
+                if result.is_err() {
+                    error!("A task errored out: {}", &result);
+                }
+                <Self as #app_trait<S, L>>::stop_all_tasks(self, #sim_callback_arg)?;
+                let _ = self.log_shutdown_completed();
+                result
+            }
+        } else if parallel_rt_run_supported {
+            quote! {
                 #kill_handler
 
                 <Self as #app_trait<S, L>>::start_all_tasks(self)?;
@@ -5046,7 +5447,7 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                                     }
                                 }
 
-                                if STOP_FLAG.load(Ordering::SeqCst) {
+                                if #mission_mod::STOP_FLAG.load(Ordering::SeqCst) {
                                     stop_launching = true;
                                 }
                                 continue;
@@ -5096,7 +5497,7 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                         let worker_result = match recv_result {
                             Ok(worker_result) => worker_result,
                             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                                if STOP_FLAG.load(Ordering::SeqCst) {
+                                if #mission_mod::STOP_FLAG.load(Ordering::SeqCst) {
                                     stop_launching = true;
                                 }
                                 continue;
@@ -5111,114 +5512,9 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                         in_flight = in_flight.saturating_sub(1);
                         pending_results.insert(worker_result.clid, worker_result);
 
-                        while let Some(worker_result) = pending_results.remove(&next_commit_clid) {
-                            if fatal_error.is_none()
-                                && parallel_rt.current_commit_clid() != worker_result.clid
-                            {
-                                shutdown.store(true, Ordering::Release);
-                                fatal_error = Some(CuError::from(format!(
-                                    "Parallel commit checkpoint out of sync: expected {}, got {}",
-                                    parallel_rt.current_commit_clid(),
-                                    worker_result.clid
-                                )));
-                                stop_launching = true;
-                            }
+                        #parallel_commit_tokens
 
-                            let mut worker_result = worker_result;
-                            if fatal_error.is_none() {
-                                match worker_result.outcome {
-                                    Ok(cu29::curuntime::ProcessStepOutcome::AbortCopperList) => {
-                                        let mut culist = worker_result
-                                            .culist
-                                            .take()
-                                            .expect("parallel abort result missing CopperList ownership");
-                                        let mut commit_ctx = cu29::context::CuContext::from_runtime_metadata(
-                                            clock.clone(),
-                                            worker_result.clid,
-                                            instance_id,
-                                            subsystem_code,
-                                            #mission_mod::TASK_IDS,
-                                        );
-                                        commit_ctx.clear_current_component();
-                                        commit_ctx.clear_current_task();
-                                        let monitor_result = monitor.process_copperlist(
-                                            &commit_ctx,
-                                            #mission_mod::MONITOR_LAYOUT.view(&#mission_mod::collect_metadata(&culist)),
-                                        );
-                                        match cl_manager.end_of_processing_boxed(culist)? {
-                                            cu29::curuntime::OwnedCopperListSubmission::Recycled(culist) => {
-                                                free_copperlists.push(culist);
-                                            }
-                                            cu29::curuntime::OwnedCopperListSubmission::Pending => {}
-                                        }
-                                        monitor_result?;
-                                    }
-                                    Ok(cu29::curuntime::ProcessStepOutcome::Continue) => {
-                                        let mut culist = worker_result
-                                            .culist
-                                            .take()
-                                            .expect("parallel worker result missing CopperList ownership");
-                                        let mut commit_ctx = cu29::context::CuContext::from_runtime_metadata(
-                                            clock.clone(),
-                                            worker_result.clid,
-                                            instance_id,
-                                            subsystem_code,
-                                            #mission_mod::TASK_IDS,
-                                        );
-                                        commit_ctx.clear_current_component();
-                                        commit_ctx.clear_current_task();
-                                        let monitor_result = monitor.process_copperlist(
-                                            &commit_ctx,
-                                            #mission_mod::MONITOR_LAYOUT.view(&#mission_mod::collect_metadata(&culist)),
-                                        );
-
-                                        #(#preprocess_logging_calls)*
-
-                                        match cl_manager.end_of_processing_boxed(culist)? {
-                                            cu29::curuntime::OwnedCopperListSubmission::Recycled(culist) => {
-                                                free_copperlists.push(culist);
-                                            }
-                                            cu29::curuntime::OwnedCopperListSubmission::Pending => {}
-                                        }
-                                        let (keyframe_bytes, dropped_keyframes_total) = #parallel_keyframe_finish;
-                                        monitor_result?;
-                                        let stats = cu29::monitoring::CopperListIoStats {
-                                            raw_culist_bytes: core::mem::size_of::<CuList>() as u64
-                                                + cl_manager.last_handle_bytes,
-                                            handle_bytes: cl_manager.last_handle_bytes,
-                                            encoded_culist_bytes: cl_manager.last_encoded_bytes,
-                                            keyframe_bytes,
-                                            structured_log_bytes_total: ::cu29::prelude::structured_log_bytes_total(),
-                                            culistid: worker_result.clid,
-                                            dropped_copperlists_total: cl_manager.dropped_copperlists_total(),
-                                            dropped_keyframes_total,
-                                        };
-                                        monitor.observe_copperlist_io(stats);
-
-                                        // Postprocess, when present, now runs inside the owning
-                                        // component stage instead of on the ordered commit path.
-                                    }
-                                    Err(error) => {
-                                        shutdown.store(true, Ordering::Release);
-                                        stop_launching = true;
-                                        fatal_error = Some(error);
-                                        if let Some(mut culist) = worker_result.culist.take() {
-                                            culist.change_state(cu29::copperlist::CopperListState::Free);
-                                            free_copperlists.push(culist);
-                                        }
-                                    }
-                                }
-                            } else if let Some(mut culist) = worker_result.culist.take() {
-                                culist.change_state(cu29::copperlist::CopperListState::Free);
-                                free_copperlists.push(culist);
-                            }
-
-                            #parallel_keyframe_clear
-                            parallel_rt.release_commit(worker_result.clid + 1);
-                            next_commit_clid += 1;
-                        }
-
-                        if STOP_FLAG.load(Ordering::SeqCst) {
+                        if #mission_mod::STOP_FLAG.load(Ordering::SeqCst) {
                             stop_launching = true;
                         }
                     }
@@ -5241,8 +5537,6 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
             }
         } else {
             quote! {
-                static STOP_FLAG: AtomicBool = AtomicBool::new(false);
-
                 #kill_handler
 
                 <Self as #app_trait<S, L>>::start_all_tasks(self, #sim_callback_arg)?;
@@ -6333,6 +6627,13 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                             _storage: core::marker::PhantomData,
                         }
                     }
+
+                    /// Asks a running `run()` to return after the current
+                    /// iteration (serial) or admitted cycle (multicore).
+                    #[allow(dead_code)]
+                    pub fn request_stop() {
+                        #mission_mod::STOP_FLAG.store(true, core::sync::atomic::Ordering::SeqCst);
+                    }
                 },
                 quote! {'a, F, MmapSectionStorage, UnifiedLoggerWrite, R},
                 Some(quote! {
@@ -6385,6 +6686,13 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                             #builder_logstream_init
                             _storage: core::marker::PhantomData,
                         }
+                    }
+
+                    /// Asks a running `run()` to return after the current
+                    /// iteration (serial) or admitted cycle (multicore).
+                    #[allow(dead_code)]
+                    pub fn request_stop() {
+                        #mission_mod::STOP_FLAG.store(true, core::sync::atomic::Ordering::SeqCst);
                     }
                 },
                 quote! {MmapSectionStorage, UnifiedLoggerWrite, R},
@@ -6908,6 +7216,10 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                         MONITORED_COMPONENTS,
                         CULIST_COMPONENT_MAPPING,
                     );
+                /// Set to stop `run()` after the current iteration or cycle.
+                pub static STOP_FLAG: core::sync::atomic::AtomicBool =
+                    core::sync::atomic::AtomicBool::new(false);
+
                 #parallel_rt_metadata_defs
 
                 #[inline]
@@ -7359,6 +7671,9 @@ struct CuTaskSpecSet {
     /// Whether each task declares `kind: stateless_task` and implements
     /// `CuStatelessTask`. Stateless tasks are never backgrounded.
     pub stateless_flags: Vec<bool>,
+    /// For a background task whose plan binds its result to an earlier
+    /// CopperList: the lag. The gateway waits for the running job first.
+    pub background_result_lags: Vec<Option<u32>>,
     /// Thread pool name each task runs on when backgrounded (defaults to the
     /// `"background"` pool). Only meaningful where `background_flags` is true.
     pub background_pools: Vec<String>,
@@ -7557,11 +7872,14 @@ impl CuTaskSpecSet {
             node_id_to_task_index[*node_id as usize] = Some(index);
         }
 
+        let background_result_lags = vec![None; ids.len()];
+
         Ok(Self {
             ids,
             cutypes,
             background_flags,
             stateless_flags,
+            background_result_lags,
             background_pools,
             anytime_configs,
             async_inner_task_types,
@@ -9604,6 +9922,22 @@ fn build_bridge_resource_mappings(
     }
 }
 
+/// What a fixed plan adds to the per-CL step sequence: background result
+/// semantics and, for a multicore plan, the lane schedule to generate.
+struct ExecutionSchedule {
+    background: Vec<CuPlanBackground>,
+    lanes: Option<LanePlan>,
+}
+
+/// The per-mission step sequence, its entities, the plan-to-config node map,
+/// and the schedule a fixed plan adds.
+type ExecutionPlanBuild = (
+    CuExecutionLoop,
+    Vec<ExecutionEntity>,
+    HashMap<NodeId, NodeId>,
+    ExecutionSchedule,
+);
+
 fn build_execution_plan(
     config: &CuConfig,
     graph: &CuGraph,
@@ -9614,6 +9948,16 @@ fn build_execution_plan(
     Vec<ExecutionEntity>,
     HashMap<NodeId, NodeId>,
 )> {
+    build_execution_plan_with_schedule(config, graph, mission, bridge_specs)
+        .map(|(execution, entities, plan_to_original, _)| (execution, entities, plan_to_original))
+}
+
+fn build_execution_plan_with_schedule(
+    config: &CuConfig,
+    graph: &CuGraph,
+    mission: &str,
+    bridge_specs: &mut [BridgeSpec],
+) -> CuResult<ExecutionPlanBuild> {
     let assembled = assemble_runtime_plan_for_mission(config, graph, mission)?;
     let mut exec_entities = Vec::with_capacity(assembled.entities.len());
     for (plan_node_id, entity) in assembled.entities.iter().enumerate() {
@@ -9670,7 +10014,16 @@ fn build_execution_plan(
             original.map(|original| (plan_node_id as NodeId, original))
         })
         .collect();
-    Ok((assembled.execution, exec_entities, plan_to_original))
+    let schedule = ExecutionSchedule {
+        background: assembled.background,
+        lanes: assembled.lanes,
+    };
+    Ok((
+        assembled.execution,
+        exec_entities,
+        plan_to_original,
+        schedule,
+    ))
 }
 
 fn collect_culist_metadata(
@@ -9937,8 +10290,15 @@ fn parallel_task_lifecycle_tokens(
     mission_mod: &Ident,
     task_instance: &proc_macro2::TokenStream,
     placement: ParallelLifecyclePlacement,
+    by_ref: bool,
 ) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
     let rt_guard = rtsan_guard_tokens();
+    // A stateless task's per-CL hooks take `&self`.
+    let receiver = if by_ref {
+        quote! { &#task_instance }
+    } else {
+        quote! { &mut #task_instance }
+    };
     let abort_process_step = abort_process_step_tokens(true);
 
     let preprocess_alloc_open = alloc_scope_open_tokens();
@@ -9964,7 +10324,7 @@ fn parallel_task_lifecycle_tokens(
             #preprocess_alloc_open
             let maybe_error = {
                 #rt_guard
-                <#task_type as #task_trait>::preprocess(&mut #task_instance, &ctx)
+                <#task_type as #task_trait>::preprocess(#receiver, &ctx)
             };
             #preprocess_alloc_close
             if let Err(error) = maybe_error {
@@ -10016,7 +10376,7 @@ fn parallel_task_lifecycle_tokens(
             #postprocess_alloc_open
             let maybe_error = {
                 #rt_guard
-                <#task_type as #task_trait>::postprocess(&mut #task_instance, &ctx)
+                <#task_type as #task_trait>::postprocess(#receiver, &ctx)
             };
             #postprocess_alloc_close
             if let Err(error) = maybe_error {
@@ -10922,7 +11282,15 @@ fn generate_task_execution_tokens(
         mission_mod,
         &task_instance,
         lifecycle_placement,
+        task_specs.stateless_flags[tid],
     );
+    // A plan may bind a background result to the previous CopperList: the
+    // gateway then waits for the running job before publishing and dispatching.
+    let lag_wait = if task_specs.background_result_lags[tid].is_some() && !sim_mode {
+        quote! { #task_instance.wait_for_job()?; }
+    } else {
+        quote! {}
+    };
     let maybe_sim_tick = if sim_mode && !run_in_sim_flag {
         quote! {
             if !doit {
@@ -11025,6 +11393,7 @@ fn generate_task_execution_tokens(
                     >(&#task_instance, cumsg_output);
                     #rt_guard
                     ctx.set_current_task(#tid);
+                    #lag_wait
                     #task_instance.process(&ctx, cumsg_output)
                 };
                 #output_end_time
@@ -11197,6 +11566,7 @@ fn generate_task_execution_tokens(
                     >(&#task_instance, cumsg_output);
                     #rt_guard
                     ctx.set_current_task(#tid);
+                    #lag_wait
                     #task_instance.process(&ctx, cumsg_input, cumsg_output)
                 };
                 #output_end_time
@@ -11671,6 +12041,318 @@ fn build_parallel_lifecycle_placements(
     placements
 }
 
+/// The generated pieces of the lane executor for one mission.
+struct LaneExecutorTokens {
+    worker_spawns: Vec<proc_macro2::TokenStream>,
+    dispatcher_scheduling: proc_macro2::TokenStream,
+    occurrences: proc_macro2::Literal,
+    occurrences_per_copperlist: proc_macro2::Literal,
+    copperlists_per_cycle: proc_macro2::Literal,
+    max_in_flight: proc_macro2::Literal,
+}
+
+fn scheduling_policy_tokens(policy: SchedulingPolicy) -> proc_macro2::TokenStream {
+    match policy {
+        SchedulingPolicy::Fair => quote! { cu29::config::SchedulingPolicy::Fair },
+        SchedulingPolicy::Nice(nice) => quote! { cu29::config::SchedulingPolicy::Nice(#nice) },
+        SchedulingPolicy::Fifo { priority } => {
+            quote! { cu29::config::SchedulingPolicy::Fifo { priority: #priority } }
+        }
+        SchedulingPolicy::RoundRobin { priority } => {
+            quote! { cu29::config::SchedulingPolicy::RoundRobin { priority: #priority } }
+        }
+    }
+}
+
+fn plan_thread_spec_tokens(
+    id: &str,
+    cpu: Option<usize>,
+    policy: SchedulingPolicy,
+) -> proc_macro2::TokenStream {
+    let affinity = match cpu {
+        Some(cpu) => quote! { Some(vec![#cpu]) },
+        None => quote! { None },
+    };
+    let policy = scheduling_policy_tokens(policy);
+    quote! {
+        cu29::config::ThreadPoolConfig {
+            id: #id.to_string(),
+            threads: 1,
+            affinity: #affinity,
+            policy: #policy,
+            on_error: cu29::config::OnError::Strict,
+        }
+    }
+}
+
+/// Generates one thread per plan worker running its occurrences in order,
+/// each waiting for its CopperList's admission and its dependencies.
+///
+/// A stage function already runs an anytime node's base and refine phases
+/// together, so a refine occurrence must directly follow its base (or the
+/// previous refine) on the same worker and carry no dependency other than
+/// that phase chain; edges leaving a refine are taken from the whole stage.
+fn build_lane_executor_tokens(
+    lane_plan: &LanePlan,
+    culist_plan: &CuExecutionLoop,
+    stage_idents: &[Ident],
+    mission_mod: &Ident,
+    keyframe_captures: &Option<proc_macro2::TokenStream>,
+    keyframe_fields: &Option<proc_macro2::TokenStream>,
+) -> CuResult<LaneExecutorTokens> {
+    let steps: Vec<&CuExecutionStep> = culist_plan
+        .steps
+        .iter()
+        .map(|unit| match unit {
+            CuExecutionUnit::Step(step) => Ok(step.as_ref()),
+            CuExecutionUnit::Loop(_) => Err(CuError::from(
+                "Execution loops are not supported by the lane executor",
+            )),
+        })
+        .collect::<CuResult<_>>()?;
+    let mut stage_of_step = Vec::with_capacity(steps.len());
+    let mut next_stage = 0usize;
+    for step in &steps {
+        if step.phase == CuStepPhase::AnytimeRefine {
+            stage_of_step.push(None);
+        } else {
+            stage_of_step.push(Some(next_stage));
+            next_stage += 1;
+        }
+    }
+    if next_stage != stage_idents.len() {
+        return Err(CuError::from(
+            "Lane executor: stage functions do not match the execution plan",
+        ));
+    }
+    let occurrences = &lane_plan.occurrences;
+    let occurrence_at = |step: usize, copperlist: u32| {
+        occurrences
+            .iter()
+            .position(|occ| occ.step == step && occ.copperlist == copperlist)
+    };
+    // The occurrence a refine folds into (its base occurrence), and the
+    // occurrence that must precede it on its worker (the previous phase).
+    let mut base_of = vec![None; occurrences.len()];
+    let mut previous_phase = vec![None; occurrences.len()];
+    for (index, occ) in occurrences.iter().enumerate() {
+        let step = steps[occ.step];
+        if step.phase != CuStepPhase::AnytimeRefine {
+            continue;
+        }
+        let base_step = (0..occ.step).rev().find(|&i| {
+            steps[i].node_id == step.node_id && steps[i].phase == CuStepPhase::AnytimeBase
+        });
+        let previous_step = (0..occ.step)
+            .rev()
+            .find(|&i| steps[i].node_id == step.node_id);
+        let (Some(base_step), Some(previous_step)) = (base_step, previous_step) else {
+            return Err(CuError::from(format!(
+                "Lane executor: refine step of task '{}' has no base step",
+                step.node.get_id()
+            )));
+        };
+        base_of[index] = occurrence_at(base_step, occ.copperlist);
+        previous_phase[index] = occurrence_at(previous_step, occ.copperlist);
+    }
+    let resolve = |index: usize| base_of[index].unwrap_or(index);
+    let mut dependencies: Vec<(usize, usize, u32)> = Vec::new();
+    for edge in &lane_plan.dependencies {
+        let (from, to, lag) = (edge.from as usize, edge.to as usize, edge.cycle_lag);
+        if base_of[to].is_some() {
+            if previous_phase[to] == Some(from) && lag == 0 {
+                continue;
+            }
+            let occ = occurrences[to];
+            return Err(CuError::from(format!(
+                "Lane executor: refine step of task '{}' (CL {}) may only depend on its previous phase; it runs inside its base step's stage",
+                steps[occ.step].node.get_id(),
+                occ.copperlist
+            )));
+        }
+        dependencies.push((resolve(from), to, lag));
+    }
+    let mut worker_spawns = Vec::with_capacity(lane_plan.workers.len());
+    let k = u64::from(lane_plan.copperlists_per_cycle);
+    for worker in &lane_plan.workers {
+        let CuPlanPlacement::Thread { cpu, policy } = &worker.placement else {
+            return Err(CuError::from(format!(
+                "Lane executor: worker '{}' must be a thread",
+                worker.id
+            )));
+        };
+        let worker_id = worker.id.as_str();
+        let spec = plan_thread_spec_tokens(worker_id, *cpu, *policy);
+        let mut blocks = Vec::new();
+        let mut previous: Option<usize> = None;
+        for &index in &worker.occurrences {
+            if base_of[index].is_some() {
+                if previous_phase[index] != previous {
+                    let occ = occurrences[index];
+                    return Err(CuError::from(format!(
+                        "Lane executor: refine step of task '{}' (CL {}) must directly follow its previous phase on worker '{}'",
+                        steps[occ.step].node.get_id(),
+                        occ.copperlist,
+                        worker.id
+                    )));
+                }
+                previous = Some(index);
+                continue;
+            }
+            previous = Some(index);
+            let occ = occurrences[index];
+            let stage_ident =
+                &stage_idents[stage_of_step[occ.step].expect("non-refine step has a stage")];
+            let offset = u64::from(occ.copperlist);
+            let waits: Vec<proc_macro2::TokenStream> = dependencies
+                .iter()
+                .filter(|(_, to, _)| *to == index)
+                .map(|(from, _, lag)| {
+                    let lag = u64::from(*lag);
+                    quote! {
+                        if cycle >= #lag && !lanes.wait_completed(#from, cycle - #lag) {
+                            break;
+                        }
+                    }
+                })
+                .collect();
+            blocks.push(quote! {
+                {
+                    let clid = first_clid + cycle * #k + #offset;
+                    let Some(culist_ptr) = lanes.wait_admitted(clid) else {
+                        break;
+                    };
+                    #(#waits)*
+                    let outcome: cu29::curuntime::ProcessStepResult = if lanes.is_aborted(clid) || lanes.is_shut_down() {
+                        Ok(cu29::curuntime::ProcessStepOutcome::Continue)
+                    } else {
+                        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            let execution_probe = unsafe { execution_probe_ptr.as_ref() };
+                            let monitor = unsafe { monitor_ptr.as_ref() };
+                            // SAFETY: the dispatcher keeps this buffer alive until every
+                            // occurrence of the CopperList completed. The plan gives each
+                            // message slot one producer and orders every consumer after
+                            // it, so this step's slot accesses never overlap another
+                            // lane's; other lanes work on other slots of the same list.
+                            let culist = unsafe { &mut *(culist_ptr as *mut CuList) };
+                            let mut step_rt = #mission_mod::ParallelProcessStepRuntime {
+                                clock: &clock,
+                                execution_probe,
+                                monitor,
+                                task_ptrs: &task_ptrs,
+                                task_locks: task_locks.as_ref(),
+                                bridge_ptrs: &bridge_ptrs,
+                                bridge_locks: bridge_locks.as_ref(),
+                                #keyframe_fields
+                                culist,
+                                clid,
+                                ctx: cu29::context::CuContext::from_runtime_metadata(
+                                    clock.clone(),
+                                    clid,
+                                    instance_id,
+                                    subsystem_code,
+                                    #mission_mod::TASK_IDS,
+                                ),
+                            };
+                            #stage_ident(&mut step_rt)
+                        })) {
+                            Ok(outcome) => outcome,
+                            Err(payload) => Err(CuError::from(format!(
+                                "Panic while processing CopperList #{} on worker {}: {}",
+                                clid,
+                                #worker_id,
+                                cu29::monitoring::panic_payload_to_string(payload.as_ref())
+                            ))),
+                        }
+                    };
+                    match outcome {
+                        Ok(cu29::curuntime::ProcessStepOutcome::Continue) => {}
+                        Ok(cu29::curuntime::ProcessStepOutcome::AbortCopperList) => lanes.abort(clid),
+                        Err(error) => {
+                            lanes.request_shutdown();
+                            let _ = done_tx.send(#mission_mod::ParallelWorkerResult {
+                                clid,
+                                culist: None,
+                                outcome: Err(error),
+                                raw_payload_bytes: 0,
+                                handle_bytes: 0,
+                            });
+                            break;
+                        }
+                    }
+                    lanes.complete(#index, cycle);
+                    if lanes.finish_occurrence(clid) {
+                        let outcome = if lanes.is_aborted(clid) {
+                            cu29::curuntime::ProcessStepOutcome::AbortCopperList
+                        } else {
+                            cu29::curuntime::ProcessStepOutcome::Continue
+                        };
+                        let sent = done_tx.send(#mission_mod::ParallelWorkerResult {
+                            clid,
+                            culist: None,
+                            outcome: Ok(outcome),
+                            raw_payload_bytes: 0,
+                            handle_bytes: 0,
+                        });
+                        if sent.is_err() {
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+        worker_spawns.push(quote! {
+            {
+                let lanes = std::sync::Arc::clone(&lanes);
+                let done_tx = done_tx.clone();
+                let clock = clock.clone();
+                let instance_id = instance_id;
+                let subsystem_code = subsystem_code;
+                let execution_probe_ptr = execution_probe_ptr;
+                let monitor_ptr = monitor_ptr;
+                let task_ptrs = task_ptrs;
+                let task_locks = std::sync::Arc::clone(&task_locks);
+                let bridge_ptrs = bridge_ptrs;
+                let bridge_locks = std::sync::Arc::clone(&bridge_locks);
+                #keyframe_captures
+                scope.spawn(move || {
+                    let spec = #spec;
+                    if cu29::thread_pool::apply_current_thread_scheduling(&spec, 0).is_err() {
+                        lanes.request_shutdown();
+                        return;
+                    }
+                    let first_clid = lanes.first_clid();
+                    let mut cycle: u64 = 0;
+                    loop {
+                        #(#blocks)*
+                        cycle += 1;
+                    }
+                });
+            }
+        });
+    }
+    let dispatcher_scheduling = match &lane_plan.dispatcher {
+        Some(CuPlanThread { cpu, policy }) => {
+            let spec = plan_thread_spec_tokens("dispatcher", *cpu, *policy);
+            quote! {
+                {
+                    let spec = #spec;
+                    cu29::thread_pool::apply_current_thread_scheduling(&spec, 0)?;
+                }
+            }
+        }
+        None => quote! {},
+    };
+    Ok(LaneExecutorTokens {
+        worker_spawns,
+        dispatcher_scheduling,
+        occurrences: proc_macro2::Literal::usize_unsuffixed(occurrences.len()),
+        occurrences_per_copperlist: proc_macro2::Literal::u32_unsuffixed(next_stage as u32),
+        copperlists_per_cycle: proc_macro2::Literal::u64_unsuffixed(k),
+        max_in_flight: proc_macro2::Literal::usize_unsuffixed(lane_plan.max_in_flight as usize),
+    })
+}
+
 fn sim_bridge_channel_set_idents(bridge_tuple_index: usize) -> (Ident, Ident, Ident, Ident) {
     (
         format_ident!("__CuSimBridge{}TxChannels", bridge_tuple_index),
@@ -11987,7 +12669,7 @@ mod tests {
     }
 
     #[test]
-    fn fixed_plan_codegen_rejects_worker_placement() {
+    fn fixed_plan_codegen_resolves_worker_placement_to_lanes() {
         use super::*;
         use cu29_runtime::planner::{CuPlan, CuPlanPlacement, Fixed};
 
@@ -12004,16 +12686,18 @@ mod tests {
             policy: Default::default(),
         };
         Fixed::new(plan).unwrap().apply(&mut config).unwrap();
-        let error =
-            build_execution_plan(&config, config.get_graph(None).unwrap(), "default", &mut [])
-                .err()
-                .expect("worker execution must not be silently linearized");
-        assert!(
-            error
-                .to_string()
-                .contains("requires a multicore/multi-CopperList executor"),
-            "{error}"
-        );
+        let (_, _, _, schedule) = build_execution_plan_with_schedule(
+            &config,
+            config.get_graph(None).unwrap(),
+            "default",
+            &mut [],
+        )
+        .expect("a worker plan resolves to a lane plan");
+        let lanes = schedule
+            .lanes
+            .expect("worker placement selects the lane executor");
+        assert_eq!(lanes.workers.len(), 1);
+        assert_eq!(lanes.occurrences.len(), 1);
     }
 
     #[test]

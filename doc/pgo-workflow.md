@@ -109,11 +109,14 @@ background: [
 
 `result` states what the gateway publishes into CL `n`:
 
-- `Lag(d)`: the result of the compute dispatched for CL `n − d`; the gateway waits for it.
-  Deterministic. The proposer picks `d` from the profiled compute cost and the CL period.
+- `Lag(d)`: the result of the compute dispatched for CL `n − d`; the gateway waits for
+  it. Content is then independent of scheduling. The proposer picks `d` from the profiled
+  compute cost and the CL period. The executor implements `d = 1` with `max_running: 1`
+  and rejects other values at build time.
 - `Sampled`: the newest completed result, whatever it is; never waits. This is today's
-  `CuAsyncTask` behaviour. Content then depends on timing, and a plan that uses it is
-  marked non-deterministic in its metadata and in the report.
+  `CuAsyncTask` behaviour. Which CL a result lands in then depends on scheduling; replay
+  stays exact because the recorded result is reinjected where it entered. Validation
+  lists sampled tasks (`CuMissionPlan::nondeterminism`) and the report carries them.
 
 ### 2.5 Capacity and commit
 
@@ -132,12 +135,18 @@ order as a serial run. `k`, `max_in_flight` and the number of lanes are independ
 
 ### 2.6 Determinism
 
-With the rules above, the content of every CL depends only on the plan and the inputs:
+Two properties are distinct. **Replay determinism** always holds: every CL is logged
+with its content, and replay reinjects recorded results (including sampled background
+results) where they entered, so a replay reproduces the run whatever the scheduler did.
+**Schedule independence** is the plan's property: the content of every CL depends only
+on the plan and the inputs, never on when workers ran. With the rules above it holds
+because:
 
 1. an operation reads only its own CL's slots, after their producers completed;
 2. a stateful component's calls are totally ordered across CLs;
 3. shared resources are ordered unless declared concurrent-safe;
-4. background results are bound to a fixed CL lag, unless `Sampled` is chosen knowingly;
+4. background results are bound to a fixed CL lag; `Sampled` gives this up knowingly,
+   and only this;
 5. commit, logging and keyframes follow CL id order.
 
 Tasks that read the clock (`ctx.now()`, pacers) are unchanged: their behaviour is the same
@@ -191,22 +200,32 @@ then `admitted_clid = n + 1`. Commit the smallest uncommitted CL whose occurrenc
 have all passed it: monitor, log, keyframe end, recycle the box. On `STOP_FLAG`, stop
 admitting, wake every lane, let in-flight CLs commit, then `stop_all_tasks`.
 
-**Keyframes:** a CL `K` that captures a keyframe is admitted only after every CL `< K` has
-committed, and the next CL only after `K`'s snapshot is taken. That drains the pipeline at
-every keyframe interval and makes the snapshot a consistent CL boundary, exactly as in the
-serial runtime. The cost is one bubble per interval and is reported by the profile.
+**Keyframes are captured in the flow, never by draining.** A keyframe for CL `K` is the
+state of every component at the `K` boundary. Each component freezes its own state inside
+its own step for `K`, before that step runs, on whichever lane runs it; the state edges
+order the component's `K − 1` step before its `K` step, so what it freezes is exactly its
+state after `K − 1`, whatever the other lanes are doing at that moment. No CL waits for
+another to commit, the pipeline keeps `max_in_flight` CLs in flight across a keyframe,
+and latency does not change at keyframe CLs. This is the same mechanism `parallel-rt`
+uses. The keyframe manager captures one CL at a time, so `keyframe_interval` must be at
+least `max_in_flight` for a keyframe never to delay an admission; the proposer keeps
+that, and the executor reports the case where it does not hold.
 
-**Background compute** keeps the current pools. `Lag(d)` is a wait in the gateway before
-publishing; `Sampled` is the current wrapper.
+**Background compute** keeps the current pools. `Lag(1)` is a wait in the gateway for the
+running job before publishing; `Sampled` is the current wrapper. The serial executor
+honours `Lag(1)` the same way, so a serial and a multicore plan of one graph record the
+same CLs.
 
 **Errors** that a monitor turns into a shutdown set a flag that every wait checks, so no
 lane blocks forever. A worker whose CPU or policy cannot be applied fails startup under
-`on_error: Strict`, which is what plans emit.
+`on_error: Strict`, which is what plans emit. `App::request_stop()` (or Ctrl-C, which
+stops every application in the process) ends the run at the next cycle boundary, so
+every admitted cycle completes and commits.
 
-**Tests:** a synthetic graph with a fork/join, a stateful chain, a stateless task split
-across two workers with `k = 2`, a background task with `Lag(1)`, and keyframes on; the
-logged CL stream must equal the serial run's stream byte for byte (as
-`cu_runtime_matrix` checks today), on a deterministic clock and on the real one.
+**Tests:** `core/cu29_runtime/tests/lane_plan.rs` runs one graph (fork/join, a stateful
+chain, a stateless task split across two workers with `k = 2`, a background task with
+`Lag(1)`, keyframes on) under a serial plan and under a three-worker plan with four CLs
+in flight, and requires the recorded CLs to be equal, keyed by producing task.
 
 ## 4. Profile
 
@@ -218,7 +237,7 @@ the generated message types. It contains, keyed by operation key:
   produced) and *skipped* CLs;
 - the firing rate of each operation over the window, which gives its period;
 - for background tasks, compute cost and gateway cost separately;
-- per-CL dispatcher and commit overhead, and the keyframe bubble;
+- per-CL dispatcher and commit overhead;
 - the chain measurements of §7 for the profiled run, as a baseline;
 - the config signature and the plan the run executed, so a profile is never applied to a
   graph it was not recorded on.

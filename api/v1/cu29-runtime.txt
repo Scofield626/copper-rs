@@ -731,6 +731,7 @@ pub mod cu29_runtime::cuasynctask
 pub struct cu29_runtime::cuasynctask::CuAsyncSrcTask<T, O> where T: for<'m> cu29_runtime::cutask::CuSrcTask<Output<'m> = cu29_runtime::cutask::CuMsg<O>> + core::marker::Send + 'static, O: cu29_runtime::cutask::CuMsgPayload + core::marker::Send + 'static
 impl<T, O> cu29_runtime::cuasynctask::CuAsyncSrcTask<T, O> where T: for<'m> cu29_runtime::cutask::CuSrcTask<Output<'m> = cu29_runtime::cutask::CuMsg<O>> + core::marker::Send + 'static, O: cu29_runtime::cutask::CuMsgPayload + core::marker::Send + 'static
 pub fn cu29_runtime::cuasynctask::CuAsyncSrcTask<T, O>::new(config: core::option::Option<&cu29_runtime::config::ComponentConfig>, resources: <T as cu29_runtime::cutask::CuSrcTask>::Resources, tp: alloc::sync::Arc<rayon_core::thread_pool::ThreadPool>) -> cu29_traits::CuResult<Self>
+pub fn cu29_runtime::cuasynctask::CuAsyncSrcTask<T, O>::wait_for_job(&self) -> cu29_traits::CuResult<()>
 impl<T, O> cu29_runtime::cutask::CuSrcTask for cu29_runtime::cuasynctask::CuAsyncSrcTask<T, O> where T: for<'m> cu29_runtime::cutask::CuSrcTask<Output<'m> = cu29_runtime::cutask::CuMsg<O>> + core::marker::Send + 'static, O: cu29_runtime::cutask::CuMsgPayload + core::marker::Send + 'static
 pub type cu29_runtime::cuasynctask::CuAsyncSrcTask<T, O>::Output<'m> = <T as cu29_runtime::cutask::CuSrcTask>::Output
 pub type cu29_runtime::cuasynctask::CuAsyncSrcTask<T, O>::Resources<'r> = cu29_runtime::cuasynctask::CuAsyncSrcTaskResources<'r, T>
@@ -758,6 +759,7 @@ pub cu29_runtime::cuasynctask::CuAsyncSrcTaskResources::threadpool: alloc::sync:
 pub struct cu29_runtime::cuasynctask::CuAsyncTask<T, O> where T: for<'m> cu29_runtime::cutask::CuTask<Output<'m> = cu29_runtime::cutask::CuMsg<O>> + core::marker::Send + 'static, O: cu29_runtime::cutask::CuMsgPayload + core::marker::Send + 'static
 impl<T, O> cu29_runtime::cuasynctask::CuAsyncTask<T, O> where T: for<'m> cu29_runtime::cutask::CuTask<Output<'m> = cu29_runtime::cutask::CuMsg<O>> + core::marker::Send + 'static, O: cu29_runtime::cutask::CuMsgPayload + core::marker::Send + 'static
 pub fn cu29_runtime::cuasynctask::CuAsyncTask<T, O>::new(config: core::option::Option<&cu29_runtime::config::ComponentConfig>, resources: <T as cu29_runtime::cutask::CuTask>::Resources, tp: alloc::sync::Arc<rayon_core::thread_pool::ThreadPool>) -> cu29_traits::CuResult<Self>
+pub fn cu29_runtime::cuasynctask::CuAsyncTask<T, O>::wait_for_job(&self) -> cu29_traits::CuResult<()>
 impl<T, I, O> cu29_runtime::cutask::CuTask for cu29_runtime::cuasynctask::CuAsyncTask<T, O> where T: for<'i, 'o> cu29_runtime::cutask::CuTask<Input<'i> = cu29_runtime::cutask::CuMsg<I>, Output<'o> = cu29_runtime::cutask::CuMsg<O>> + core::marker::Send + 'static, I: cu29_runtime::cutask::CuMsgPayload + core::marker::Send + core::marker::Sync + 'static, O: cu29_runtime::cutask::CuMsgPayload + core::marker::Send + 'static
 pub type cu29_runtime::cuasynctask::CuAsyncTask<T, O>::Input<'m> = <T as cu29_runtime::cutask::CuTask>::Input
 pub type cu29_runtime::cuasynctask::CuAsyncTask<T, O>::Output<'m> = <T as cu29_runtime::cutask::CuTask>::Output
@@ -989,10 +991,13 @@ pub fn cu29_runtime::curuntime::RuntimeLifecycleStackInfo::borrow_decode<__D: cu
 impl<__Context> cu_bincode::de::Decode<__Context> for cu29_runtime::curuntime::RuntimeLifecycleStackInfo
 pub fn cu29_runtime::curuntime::RuntimeLifecycleStackInfo::decode<__D: cu_bincode::de::Decoder<Context = __Context>>(decoder: &mut __D) -> core::result::Result<Self, cu_bincode::error::DecodeError>
 pub fn cu29_runtime::curuntime::compute_runtime_plan(graph: &cu29_runtime::config::CuGraph) -> cu29_traits::CuResult<cu29_runtime::curuntime::CuExecutionLoop>
+pub fn cu29_runtime::curuntime::ensure_stop_handler(install: impl core::ops::function::FnOnce())
 pub fn cu29_runtime::curuntime::expand_anytime_steps(plan: &mut cu29_runtime::curuntime::CuExecutionLoop) -> cu29_traits::CuResult<()>
 pub fn cu29_runtime::curuntime::find_task_type_for_id(graph: &cu29_runtime::config::CuGraph, node_id: cu29_runtime::config::NodeId) -> cu29_traits::CuResult<cu29_runtime::curuntime::CuTaskType>
 pub fn cu29_runtime::curuntime::perf_now(_clock: &cu29_clock::RobotClock) -> cu29_clock::CuTime
 pub fn cu29_runtime::curuntime::rate_target_period(rate_target_hz: u64) -> cu29_traits::CuResult<cu29_clock::CuDuration>
+pub fn cu29_runtime::curuntime::register_stop_flag(flag: &'static core::sync::atomic::AtomicBool)
+pub fn cu29_runtime::curuntime::request_stop_all()
 pub mod cu29_runtime::cutask
 pub struct cu29_runtime::cutask::BincodeAdapter<'a, T: cu29_runtime::cutask::Freezable + ?core::marker::Sized>(pub &'a T)
 impl<'a, T: cu29_runtime::cutask::Freezable + ?core::marker::Sized> cu_bincode::enc::Encode for cu29_runtime::cutask::BincodeAdapter<'a, T>

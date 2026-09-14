@@ -13,7 +13,7 @@ use cu29_traits::{CuError, CuResult};
 use rayon::ThreadPool;
 use std::any::Any;
 use std::cell::UnsafeCell;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 const ASYNC_IDLE_TAG: u8 = 0xA0;
 const ASYNC_WAITING_TAG: u8 = 0xA1;
@@ -232,12 +232,18 @@ where
         .ok_or_else(|| CuError::from("Async task dispatch slot type did not match its input"))
 }
 
-fn record_async_error<O: CuMsgPayload>(state: &Mutex<AsyncState<O>>, error: CuError) {
+fn record_async_error<O: CuMsgPayload>(
+    state: &Mutex<AsyncState<O>>,
+    completion: &Condvar,
+    error: CuError,
+) {
     let mut guard = match state.lock() {
         Ok(guard) => guard,
         Err(poison) => poison.into_inner(),
     };
     guard.status = failure(error);
+    drop(guard);
+    completion.notify_all();
 }
 
 #[derive(Reflect)]
@@ -251,6 +257,9 @@ where
     task: Arc<Mutex<T>>,
     #[reflect(ignore)]
     state: Arc<Mutex<AsyncState<O>>>,
+    /// Signalled when a dispatched job has completed.
+    #[reflect(ignore)]
+    completion: Arc<Condvar>,
     #[reflect(ignore)]
     dispatch: Option<ErasedDispatchSlot>,
     #[reflect(ignore)]
@@ -304,9 +313,22 @@ where
         Ok(Self {
             task,
             state: Arc::new(Mutex::new(AsyncState::new())),
+            completion: Arc::new(Condvar::new()),
             dispatch: None,
             tp,
         })
+    }
+
+    /// Blocks until no dispatched job is running, so the next `process`
+    /// publishes that job's result. Plans that bind a background result to a
+    /// fixed CopperList lag call this before the gateway runs.
+    pub fn wait_for_job(&self) -> CuResult<()> {
+        let poisoned = || CuError::from("Async task state mutex poisoned while waiting for a job");
+        let mut guard = self.state.lock().map_err(|_| poisoned())?;
+        while matches!(guard.status, AsyncStatus::Running(_)) {
+            guard = self.completion.wait(guard).map_err(|_| poisoned())?;
+        }
+        Ok(())
     }
 
     fn initialize_dispatch<I>(&mut self) -> CuResult<()>
@@ -468,6 +490,7 @@ where
             let ctx = ctx.with_cl_id(dispatch_cl_id);
             let task = self.task.clone();
             let state = self.state.clone();
+            let completion = self.completion.clone();
             move || {
                 let mut worker_output = CuMsg::default();
                 let typed_dispatch =
@@ -476,6 +499,7 @@ where
                     } else {
                         record_async_error(
                             &state,
+                            &completion,
                             CuError::from("Async task dispatch slot type did not match its input"),
                         );
                         return;
@@ -486,6 +510,7 @@ where
                     Err(poison) => {
                         record_async_error(
                             &state,
+                            &completion,
                             CuError::from(format!("Async task mutex poisoned: {poison}")),
                         );
                         return;
@@ -537,6 +562,7 @@ where
                 };
                 guard.status = status;
                 drop(guard);
+                completion.notify_all();
                 drop(task_guard);
                 drop(retired_output);
                 drop(retired_input);
@@ -565,6 +591,9 @@ where
     task: Arc<Mutex<T>>,
     #[reflect(ignore)]
     state: Arc<Mutex<AsyncState<O>>>,
+    /// Signalled when a dispatched job has completed.
+    #[reflect(ignore)]
+    completion: Arc<Condvar>,
     #[reflect(ignore)]
     tp: Arc<ThreadPool>,
 }
@@ -616,8 +645,21 @@ where
         Ok(Self {
             task,
             state: Arc::new(Mutex::new(AsyncState::new())),
+            completion: Arc::new(Condvar::new()),
             tp,
         })
+    }
+
+    /// Blocks until no dispatched job is running, so the next `process`
+    /// publishes that job's result. Plans that bind a background result to a
+    /// fixed CopperList lag call this before the gateway runs.
+    pub fn wait_for_job(&self) -> CuResult<()> {
+        let poisoned = || CuError::from("Async task state mutex poisoned while waiting for a job");
+        let mut guard = self.state.lock().map_err(|_| poisoned())?;
+        while matches!(guard.status, AsyncStatus::Running(_)) {
+            guard = self.completion.wait(guard).map_err(|_| poisoned())?;
+        }
+        Ok(())
     }
 }
 
@@ -721,6 +763,7 @@ where
             let ctx = ctx.with_cl_id(dispatch_cl_id);
             let task = self.task.clone();
             let state = self.state.clone();
+            let completion = self.completion.clone();
             move || {
                 let mut worker_output = CuMsg::default();
                 let mut task_guard = match task.lock() {
@@ -728,6 +771,7 @@ where
                     Err(poison) => {
                         record_async_error(
                             &state,
+                            &completion,
                             CuError::from(format!("Async source mutex poisoned: {poison}")),
                         );
                         return;
@@ -776,6 +820,7 @@ where
                 };
                 guard.status = status;
                 drop(guard);
+                completion.notify_all();
                 drop(task_guard);
                 drop(retired_output);
             }

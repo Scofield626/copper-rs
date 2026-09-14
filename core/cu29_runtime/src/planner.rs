@@ -82,6 +82,42 @@ pub struct AssembledPlan {
     pub entities: Vec<PlanEntity>,
     /// Indexed by the plan `NodeId`; bridge stages contain `None`.
     pub plan_to_original: Vec<Option<NodeId>>,
+    /// How each background task publishes its result; empty means every one
+    /// samples its newest result (the behaviour without a fixed plan).
+    pub background: Vec<CuPlanBackground>,
+    /// The multicore schedule to generate, when the plan is not serial.
+    pub lanes: Option<LanePlan>,
+}
+
+/// A multicore plan resolved against `AssembledPlan::execution`: every
+/// occurrence names a step index, and workers list occurrence indices.
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LanePlan {
+    pub copperlists_per_cycle: u32,
+    pub max_in_flight: u32,
+    pub occurrences: Vec<LaneOccurrence>,
+    pub workers: Vec<LaneWorker>,
+    pub dispatcher: Option<CuPlanThread>,
+    pub dependencies: Vec<CuPlanDependency>,
+}
+
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LaneOccurrence {
+    /// Index into `AssembledPlan::execution.steps`.
+    pub step: usize,
+    /// CopperList offset within the cycle.
+    pub copperlist: u32,
+}
+
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LaneWorker {
+    pub id: String,
+    pub placement: CuPlanPlacement,
+    /// Occurrence indices in execution order.
+    pub occurrences: Vec<usize>,
 }
 
 /// The only decision a planner makes: a total step order over plan `NodeId`s.
@@ -858,6 +894,8 @@ fn assemble_from_order(plan_graph: PlanGraph, order: StepOrder) -> CuResult<Asse
         execution,
         entities: plan_graph.entities,
         plan_to_original: plan_graph.plan_to_original,
+        background: Vec::new(),
+        lanes: None,
     })
 }
 

@@ -258,6 +258,43 @@ pub fn perf_now(_clock: &RobotClock) -> CuTime {
 #[cfg(all(feature = "std", feature = "high-precision-limiter"))]
 const HIGH_PRECISION_LIMITER_SPIN_WINDOW_NS: u64 = 200_000;
 
+/// Process-wide stop requests: every generated application registers its stop
+/// flag, so one signal handler stops every application running in the
+/// process, and tests or embedders can stop them without a signal.
+#[cfg(feature = "std")]
+mod stop {
+    use core::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Mutex, Once};
+
+    static FLAGS: Mutex<Vec<&'static AtomicBool>> = Mutex::new(Vec::new());
+    static HANDLER: Once = Once::new();
+
+    /// Registers an application's stop flag; registering it twice is a no-op.
+    pub fn register_stop_flag(flag: &'static AtomicBool) {
+        let mut flags = FLAGS.lock().unwrap_or_else(|poison| poison.into_inner());
+        if !flags.iter().any(|known| core::ptr::eq(*known, flag)) {
+            flags.push(flag);
+        }
+    }
+
+    /// Sets every registered stop flag.
+    pub fn request_stop_all() {
+        let flags = FLAGS.lock().unwrap_or_else(|poison| poison.into_inner());
+        for flag in flags.iter() {
+            flag.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Runs `install` the first time it is called in the process; later calls
+    /// do nothing. The generated runtime installs its signal handler with it.
+    pub fn ensure_stop_handler(install: impl FnOnce()) {
+        HANDLER.call_once(install);
+    }
+}
+
+#[cfg(feature = "std")]
+pub use stop::{ensure_stop_handler, register_stop_flag, request_stop_all};
+
 /// Convert a configured runtime rate target to an integer-nanosecond period.
 #[inline]
 pub fn rate_target_period(rate_target_hz: u64) -> CuResult<CuDuration> {

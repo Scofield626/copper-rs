@@ -12,11 +12,31 @@
         (id: "sink", type: "Sink"),
     ],
     cnx: [
-        (src: "source", dst: "filter", msg: "u32"),
-        (src: "source", dst: "features", msg: "u32"),
-        (src: "filter", dst: "fuse", msg: "u32"),
-        (src: "features", dst: "fuse", msg: "u32"),
-        (src: "fuse", dst: "sink", msg: "u32"),
+        (
+            src: "source",
+            dst: "filter",
+            msg: "u32",
+        ),
+        (
+            src: "source",
+            dst: "features",
+            msg: "u32",
+        ),
+        (
+            src: "filter",
+            dst: "fuse",
+            msg: "u32",
+        ),
+        (
+            src: "features",
+            dst: "fuse",
+            msg: "u32",
+        ),
+        (
+            src: "fuse",
+            dst: "sink",
+            msg: "u32",
+        ),
     ],
     logging: (slab_size_mib: 16),
 )

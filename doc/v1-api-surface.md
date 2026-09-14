@@ -104,8 +104,8 @@ option select recorded runs identified by `Instantiated` lifecycle records.
   CuPlanWorker, CuPlanPlacement, CuPlanThread, CuPlanBackground,
   CuPlanBackgroundResult, CuPlanDependency, Fixed}`, the versioned RON plan
   format, and `cu29-plan --export-plan` / `--validate-plan` / `--import-plan`.
-  Multicore and multi-CopperList representation/validation are supported;
-  fixed execution currently supports only one main worker and one CL per cycle.
+  Serial plans run on the main thread; multicore plans run on the lane executor
+  behind the `parallel-rt` feature.
 - `CuStatelessTask` and the `kind: stateless_task` RON task kind.
 - LogStream session manifests and `ReceiverRequirements` decoder geometry/bounds.
 - `remote-debug` feature and `cu29::remote_debug`.
