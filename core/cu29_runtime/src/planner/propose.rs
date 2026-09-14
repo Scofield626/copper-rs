@@ -105,6 +105,8 @@ struct Model {
     units: Vec<Vec<usize>>,
     /// Expected cost of each unit per cycle, in nanoseconds.
     cost: Vec<u64>,
+    /// Cost of each unit in a cycle where it fires, in nanoseconds.
+    fired_cost: Vec<u64>,
     /// Zero-lag predecessor units of each unit.
     preds: Vec<Vec<usize>>,
     /// CopperList period, the dispatch granularity `g`.
@@ -138,6 +140,7 @@ struct Evaluation {
     response: Vec<Option<u64>>,
     rate: Vec<f64>,
     load: Vec<f64>,
+    cycle_rate: f64,
 }
 
 impl Model {
@@ -188,6 +191,7 @@ impl Model {
             }
         }
         let mut cost = Vec::with_capacity(units.len());
+        let mut fired_cost = Vec::with_capacity(units.len());
         for unit in &units {
             let step = &inventory.steps[unit[0]];
             let task = task_of_key(&step.key);
@@ -195,15 +199,21 @@ impl Model {
                 // The gateway only publishes and dispatches; the compute runs
                 // on its pool.
                 cost.push(0);
+                fired_cost.push(0);
                 continue;
             }
             let operation = profile.operations.get(&step.key).ok_or_else(|| {
                 CuError::from(format!("The profile has no measurement for '{}'", step.key))
             })?;
-            let fired = (operation.firing_rate_hz * copperlist_ns as f64 / 1e9).clamp(0.0, 1.0);
+            // The fraction of CopperLists the operation fires in, from counts,
+            // so an overloaded profiling run (slower CopperLists) does not
+            // understate it.
+            let fired = (operation.fired.samples as f64 / profile.copperlists.max(1) as f64)
+                .clamp(0.0, 1.0);
             let expected =
                 operation.fired.mean_ns * fired + operation.skipped.mean_ns * (1.0 - fired);
             cost.push(expected as u64);
+            fired_cost.push(operation.fired.mean_ns as u64);
         }
         let mut preds: Vec<Vec<usize>> = vec![Vec::new(); units.len()];
         for edge in &inventory.dependencies {
@@ -262,6 +272,7 @@ impl Model {
             inventory,
             units,
             cost,
+            fired_cost,
             preds,
             copperlist_ns,
             chains,
@@ -336,43 +347,10 @@ impl Model {
             });
             load.push(cost as f64 / period as f64);
         }
-        // Timeline: each lane runs its units in order; a unit starts when its
-        // lane is free and every predecessor has ended.
-        let n = self.units.len();
-        let mut lane_of = vec![0usize; n];
-        for (l, lane) in lanes.iter().enumerate() {
-            for &o in lane {
-                lane_of[o] = l;
-            }
-        }
-        let mut starts = vec![0u64; n];
-        let mut ends = vec![0u64; n];
-        let mut done = vec![false; n];
-        let mut lane_free = vec![0u64; lanes.len()];
-        let mut progressed = true;
-        let mut remaining = n;
-        while remaining > 0 && progressed {
-            progressed = false;
-            for (l, lane) in lanes.iter().enumerate() {
-                let Some(&o) = lane.iter().find(|&&o| !done[o]) else {
-                    continue;
-                };
-                if self.preds[o].iter().any(|&p| !done[p]) {
-                    continue;
-                }
-                let release = self.preds[o].iter().map(|&p| ends[p]).max().unwrap_or(0);
-                let start = lane_free[l].max(release);
-                starts[o] = start;
-                ends[o] = start + self.cost[o];
-                lane_free[l] = ends[o];
-                done[o] = true;
-                remaining -= 1;
-                progressed = true;
-            }
-        }
-        if remaining > 0 {
-            return None;
-        }
+        // Chains are timed in a cycle where everything fires: a long chain's
+        // latency is paid in the cycles it runs, not on average.
+        let (starts, ends) = self.timeline(lanes, &self.fired_cost)?;
+        let (_, expected_ends) = self.timeline(lanes, &self.cost)?;
         let mut chain_ratio = Vec::with_capacity(self.chains.len());
         for (chain, pairs) in self.chains.iter().enumerate() {
             let deadline = u64::from(self.contract_deadline(chain)) * 1_000_000;
@@ -387,7 +365,7 @@ impl Model {
         // every source, wherever the source itself runs, and so does the
         // cycle's critical path when fewer cycles than its length fit in
         // flight (`max_in_flight` CopperLists over `k` per cycle).
-        let makespan = ends.iter().copied().max().unwrap_or(0);
+        let makespan = expected_ends.iter().copied().max().unwrap_or(0);
         let cycles_in_flight =
             f64::from(self.max_in_flight) / f64::from(self.inventory.copperlists_per_cycle.max(1));
         let pipelined = makespan as f64 / cycles_in_flight;
@@ -425,7 +403,40 @@ impl Model {
             response,
             rate,
             load,
+            cycle_rate,
         })
+    }
+
+    /// Each lane runs its units in order; a unit starts when its lane is free
+    /// and every predecessor has ended.
+    fn timeline(&self, lanes: &[Vec<usize>], cost: &[u64]) -> Option<(Vec<u64>, Vec<u64>)> {
+        let n = self.units.len();
+        let mut starts = vec![0u64; n];
+        let mut ends = vec![0u64; n];
+        let mut done = vec![false; n];
+        let mut lane_free = vec![0u64; lanes.len()];
+        let mut progressed = true;
+        let mut remaining = n;
+        while remaining > 0 && progressed {
+            progressed = false;
+            for (l, lane) in lanes.iter().enumerate() {
+                let Some(&o) = lane.iter().find(|&&o| !done[o]) else {
+                    continue;
+                };
+                if self.preds[o].iter().any(|&p| !done[p]) {
+                    continue;
+                }
+                let release = self.preds[o].iter().map(|&p| ends[p]).max().unwrap_or(0);
+                let start = lane_free[l].max(release);
+                starts[o] = start;
+                ends[o] = start + cost[o];
+                lane_free[l] = ends[o];
+                done[o] = true;
+                remaining -= 1;
+                progressed = true;
+            }
+        }
+        (remaining == 0).then_some((starts, ends))
     }
 
     fn contract_deadline(&self, chain: usize) -> u32 {
@@ -744,23 +755,10 @@ impl Model {
                 )
             })
             .collect();
-        let mut lane_of = BTreeMap::new();
-        for (l, lane) in assignment.lanes.iter().enumerate() {
-            for &o in lane {
-                lane_of.insert(o, l);
-            }
-        }
         let sources = contract
             .sources
             .iter()
-            .zip(&self.sources)
-            .map(|(source, occurrences)| {
-                let rate = occurrences
-                    .iter()
-                    .map(|o| evaluation.rate[lane_of[o]])
-                    .fold(1.0f64, f64::min);
-                (source.task.clone(), rate)
-            })
+            .map(|source| (source.task.clone(), evaluation.cycle_rate))
             .collect();
         CuPrediction {
             score: evaluation.score,
@@ -968,6 +966,25 @@ mod tests {
         // Same request, same answer.
         let again = propose(&request(&config, &two, &profile, 1)).unwrap();
         assert_eq!(again, parallel);
+    }
+
+    #[test]
+    fn a_chain_is_timed_in_a_cycle_where_its_steps_fire() {
+        let config = config();
+        let mut profile = profile();
+        // `left` fires in one CopperList out of ten: cheap on average, still
+        // 3 ms in the cycles the chain runs through it.
+        let left = profile
+            .operations
+            .get_mut("mission:default|task:left|phase:whole")
+            .unwrap();
+        left.fired = CuCostStats::from_samples(&mut vec![3_000_000; 10]);
+        left.skipped = CuCostStats::from_samples(&mut vec![1_000; 90]);
+        let one = contract(vec![0]);
+        let serial = propose(&request(&config, &one, &profile, 1)).unwrap();
+        assert_eq!(serial[0].prediction.chains["hot"].latency_ns, 6_200_000);
+        let load = serial[0].prediction.workers["cpu0"].load;
+        assert!((0.32..0.36).contains(&load), "{load}");
     }
 
     #[test]
