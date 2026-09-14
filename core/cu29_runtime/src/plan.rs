@@ -5,8 +5,8 @@ use cu29_runtime::config::{
 };
 use cu29_runtime::curuntime::{CuExecutionStep, CuExecutionUnit, CuStepPhase, CuTaskType};
 use cu29_runtime::planner::{
-    AssembledPlan, DEFAULT_COPPERLIST_COUNT, PlanEntity, PlanEntityKind, assemble_runtime_plan,
-    assemble_runtime_plan_from_step_keys, mission_graphs, step_key,
+    AssembledPlan, CuPlan, DEFAULT_COPPERLIST_COUNT, Fixed, PlanEntity, PlanEntityKind,
+    assemble_runtime_plan_for_mission, mission_graphs, step_key,
 };
 use cu29_traits::{CuError, CuResult};
 use serde::Deserialize;
@@ -59,6 +59,18 @@ struct Args {
     /// Log-derived statistics produced by an application logreader.
     #[arg(long)]
     logstats: Option<PathBuf>,
+    /// Export all missions' exact process steps to a standalone RON plan.
+    #[arg(long, conflicts_with_all = ["mission", "list_missions", "logstats", "open", "import_plan", "validate_plan"])]
+    export_plan: Option<PathBuf>,
+    /// Validate a saved plan and write a config selecting the Fixed planner.
+    #[arg(long, requires = "write_config", conflicts_with_all = ["mission", "list_missions", "logstats", "open"])]
+    import_plan: Option<PathBuf>,
+    /// Destination config for --import-plan; compile the app against this file.
+    #[arg(long, requires = "import_plan")]
+    write_config: Option<PathBuf>,
+    /// Validate a serial or multicore plan without selecting an executor.
+    #[arg(long, conflicts_with_all = ["mission", "list_missions", "logstats", "open", "import_plan"])]
+    validate_plan: Option<PathBuf>,
 }
 
 fn main() {
@@ -70,7 +82,22 @@ fn main() {
 
 fn run(args: Args) -> CuResult<()> {
     let feature_refs = args.features.iter().map(String::as_str).collect::<Vec<_>>();
-    let config = load_single_config(&args.config, &feature_refs)?;
+    let mut config = load_single_config(&args.config, &feature_refs)?;
+    if let Some(path) = &args.export_plan {
+        return CuPlan::from_config(&config)?.write(path);
+    }
+    if let Some(path) = &args.validate_plan {
+        return CuPlan::read(path)?.validate(&config);
+    }
+    if let Some(path) = &args.import_plan {
+        Fixed::new(CuPlan::read(path)?)?.apply(&mut config)?;
+        let output = args
+            .write_config
+            .as_ref()
+            .ok_or_else(|| CuError::from("--import-plan requires --write-config"))?;
+        return fs::write(output, config.serialize_ron()?)
+            .map_err(|e| CuError::new_with_cause("Could not write fixed-plan config", e));
+    }
     if args.list_missions {
         for (mission, _) in mission_graphs(&config) {
             println!("{mission}");
@@ -161,11 +188,7 @@ fn render_document(
     let mut rendered = Vec::new();
     let mut total_height = MARGIN;
     for (mission, graph) in sections {
-        let plan = match config.planner_resolved_order(mission) {
-            Some(step_keys) => assemble_runtime_plan_from_step_keys(config, graph, step_keys),
-            None => assemble_runtime_plan(config, graph),
-        }
-        .map_err(|error| {
+        let plan = assemble_runtime_plan_for_mission(config, graph, mission).map_err(|error| {
             CuError::from(format!(
                 "Could not compute scheduling plan for mission '{mission}': {error}"
             ))
@@ -435,6 +458,9 @@ fn render_mission(
     let refine_totals = refine_totals(&steps);
 
     let runtime = config.runtime.as_ref();
+    let fixed = config
+        .planner_config()
+        .is_some_and(|planner| planner.get_type() == "cu29::planner::Fixed");
     let rate = runtime
         .and_then(|runtime| runtime.rate_target_hz)
         .map(|rate| format!("{rate} Hz"))
@@ -452,9 +478,9 @@ fn render_mission(
     .unwrap();
     writeln!(
         svg,
-        r#"<text class="meta" x="0" y="43">{} serial steps · {} parallel stages · {} message slots per CopperList · {} CopperLists max in flight · rate target: {}</text>"#,
+        r#"<text class="meta" x="0" y="43">{} serial steps{} · {} message slots per CopperList · {} CopperLists max in flight · rate target: {}</text>"#,
         steps.len(),
-        stages.len(),
+        if fixed { String::new() } else { format!(" · {} parallel stages", stages.len()) },
         message_slots,
         in_flight_limit,
         xml(&rate)
@@ -487,22 +513,24 @@ fn render_mission(
     let serial = render_serial(config, mission, &steps, &plan.entities, &refine_totals, y);
     svg.push_str(&serial.svg);
     y += serial.height + 26.0;
-    writeln!(
-        svg,
-        r#"<text class="subtitle" x="0" y="{y}">Parallel projection · generated stage workers + background pools</text>"#
-    )
-    .unwrap();
-    y += 17.0;
-    let parallel = render_parallel(
-        config,
-        &stages,
-        &plan.entities,
-        &refine_totals,
-        in_flight_limit,
-        y,
-    );
-    svg.push_str(&parallel.svg);
-    y += parallel.height;
+    if !fixed {
+        writeln!(
+            svg,
+            r#"<text class="subtitle" x="0" y="{y}">Parallel projection · generated stage workers + background pools</text>"#
+        )
+        .unwrap();
+        y += 17.0;
+        let parallel = render_parallel(
+            config,
+            &stages,
+            &plan.entities,
+            &refine_totals,
+            in_flight_limit,
+            y,
+        );
+        svg.push_str(&parallel.svg);
+        y += parallel.height;
+    }
 
     if let Some(observed) = observed {
         y += 28.0;
@@ -1834,6 +1862,85 @@ mod tests {
     }
 
     #[test]
+    fn cli_exports_imports_validates_and_renders_plans() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("input.ron");
+        let plan_path = dir.path().join("plan.ron");
+        let fixed_path = dir.path().join("fixed.ron");
+        let svg_path = dir.path().join("fixed.svg");
+        fs::write(&config_path, r#"(
+            runtime: (thread_pools: [(id: "rt", threads: 2)]),
+            tasks: [(id: "left", type: "Source", kind: source), (id: "right", type: "Source", kind: source)],
+        )"#).unwrap();
+        let parse = |paths: &[&std::ffi::OsStr]| {
+            Args::try_parse_from(
+                std::iter::once(std::ffi::OsStr::new("cu29-plan")).chain(paths.iter().copied()),
+            )
+            .unwrap()
+        };
+        run(parse(&[
+            config_path.as_os_str(),
+            "--export-plan".as_ref(),
+            plan_path.as_os_str(),
+        ]))
+        .unwrap();
+        let mut plan = CuPlan::read(&plan_path).unwrap();
+        plan.missions.get_mut("default").unwrap().lanes[0]
+            .steps
+            .reverse();
+        plan.write(&plan_path).unwrap();
+        run(parse(&[
+            config_path.as_os_str(),
+            "--import-plan".as_ref(),
+            plan_path.as_os_str(),
+            "--write-config".as_ref(),
+            fixed_path.as_os_str(),
+        ]))
+        .unwrap();
+        let config = load_single_config(&fixed_path, &[]).unwrap();
+        assert_eq!(CuPlan::from_config(&config).unwrap(), plan);
+        run(parse(&[
+            fixed_path.as_os_str(),
+            "--output".as_ref(),
+            svg_path.as_os_str(),
+        ]))
+        .unwrap();
+        let svg = fs::read_to_string(svg_path).unwrap();
+        assert!(svg.contains("task:right|phase:whole"));
+        assert!(!svg.contains("Parallel projection"));
+        plan.missions.get_mut("default").unwrap().lanes = (0..2)
+            .map(|index| cu29_runtime::planner::CuPlanLane {
+                placement: cu29_runtime::planner::CuPlanPlacement::Worker {
+                    pool: "rt".into(),
+                    index,
+                },
+                steps: vec![index],
+            })
+            .collect();
+        plan.write(&plan_path).unwrap();
+        run(parse(&[
+            config_path.as_os_str(),
+            "--validate-plan".as_ref(),
+            plan_path.as_os_str(),
+        ]))
+        .unwrap();
+        assert!(
+            Args::try_parse_from(["cu29-plan", "input.ron", "--import-plan", "plan.ron"]).is_err()
+        );
+        assert!(
+            Args::try_parse_from([
+                "cu29-plan",
+                "input.ron",
+                "--export-plan",
+                "plan.ron",
+                "--mission",
+                "default"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
     fn deterministic_svg_contains_schedule_details_and_stable_keys() {
         let config = config(
             r#"(
@@ -2179,6 +2286,10 @@ mod tests {
             open: false,
             output: output_path.clone(),
             logstats: None,
+            export_plan: None,
+            import_plan: None,
+            write_config: None,
+            validate_plan: None,
         })
         .unwrap();
         assert!(output_path.is_file());
@@ -2196,6 +2307,10 @@ mod tests {
             open: false,
             output: temp.path().join("missing.svg"),
             logstats: None,
+            export_plan: None,
+            import_plan: None,
+            write_config: None,
+            validate_plan: None,
         });
         assert!(missing.is_err());
     }
@@ -2234,6 +2349,10 @@ mod tests {
             open: false,
             output: output_path.clone(),
             logstats: Some(logstats_path),
+            export_plan: None,
+            import_plan: None,
+            write_config: None,
+            validate_plan: None,
         })
         .unwrap();
 

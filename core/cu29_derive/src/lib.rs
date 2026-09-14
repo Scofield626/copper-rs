@@ -30,8 +30,7 @@ use cu29_runtime::curuntime::{
 };
 use cu29_runtime::planner::{
     BUILTIN_PLANNERS, DEFAULT_COPPERLIST_COUNT, PLAN_ARTIFACT_FILE, PlanEntityKind,
-    assemble_runtime_plan, assemble_runtime_plan_from_step_keys, config_digest, is_builtin_planner,
-    read_plan_artifact,
+    assemble_runtime_plan_for_mission, config_digest, is_builtin_planner, read_plan_artifact,
 };
 use cu29_traits::{CuError, CuResult};
 use proc_macro2::{Ident, Span};
@@ -1936,6 +1935,13 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
         return return_error(e.to_string());
     }
     let copper_config = copper_config;
+    if parallel_rt_enabled
+        && copper_config
+            .planner_config()
+            .is_some_and(|planner| planner.get_type() == "cu29::planner::Fixed")
+    {
+        return return_error("Fixed plans currently require the serial executor. Disable parallel-rt; multicore plan execution is not implemented and the supplied placement will not be ignored.".to_string());
+    }
     if copper_config.log_streaming.is_some() && !logstream_enabled {
         return return_error(
             "copperconfig.ron declares log_streaming but the cu29 'logstream' feature is disabled"
@@ -9579,10 +9585,7 @@ fn build_execution_plan(
     Vec<ExecutionEntity>,
     HashMap<NodeId, NodeId>,
 )> {
-    let assembled = match config.planner_resolved_order(mission) {
-        Some(step_keys) => assemble_runtime_plan_from_step_keys(config, graph, step_keys)?,
-        None => assemble_runtime_plan(config, graph)?,
-    };
+    let assembled = assemble_runtime_plan_for_mission(config, graph, mission)?;
     let mut exec_entities = Vec::with_capacity(assembled.entities.len());
     for (plan_node_id, entity) in assembled.entities.iter().enumerate() {
         let kind = match entity.kind {
@@ -11951,6 +11954,36 @@ mod tests {
         assert_eq!(
             src_step.output_msg_pack.as_ref().unwrap().msg_types,
             vec!["i32", "bool"]
+        );
+    }
+
+    #[test]
+    fn fixed_plan_codegen_rejects_worker_placement() {
+        use super::*;
+        use cu29_runtime::planner::{CuPlan, CuPlanPlacement, Fixed};
+
+        let mut config = CuConfig::deserialize_ron(
+            r#"(
+            runtime: (thread_pools: [(id: "rt", threads: 1)]),
+            tasks: [(id: "src", type: "Source", kind: source)],
+        )"#,
+        )
+        .unwrap();
+        let mut plan = CuPlan::from_config(&config).unwrap();
+        plan.missions.get_mut("default").unwrap().lanes[0].placement = CuPlanPlacement::Worker {
+            pool: "rt".into(),
+            index: 0,
+        };
+        Fixed::new(plan).unwrap().apply(&mut config).unwrap();
+        let error =
+            build_execution_plan(&config, config.get_graph(None).unwrap(), "default", &mut [])
+                .err()
+                .expect("worker execution must not be silently linearized");
+        assert!(
+            error
+                .to_string()
+                .contains("requires a multicore/multi-CopperList executor"),
+            "{error}"
         );
     }
 

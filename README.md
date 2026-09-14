@@ -102,6 +102,9 @@ Copper log (`just plan-log`), and replay.
 The robot is a static thing: Copper turns its declared graph into a purpose-built
 runtime, then records messages, timing, and state into one replayable log.
 
+The experimental [execution plan workflow](doc/execution-plans.md) exports and
+validates serial or multicore schedules, and compiles supported fixed schedules.
+
 **Live telemetry:** stream robot data and structured logs to a ground station over
 UDP, view live task outputs, and save a replayable `.copper` archive. A live Copper
 twin can reconstruct selected deterministic task outputs locally to reduce

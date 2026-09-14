@@ -2801,9 +2801,10 @@ pub struct RuntimeConfig {
 }
 
 /// Selects the planner that orders the steps of every mission graph, plus its
-/// config. Mirrors [`MonitorConfig`]: `type` names a `CuPlanner` implementation.
+/// config. Mirrors [`MonitorConfig`]: `type` names a build-time planning policy.
 /// Copper ships `cu29::planner::Linearity` (the default when this section is
-/// absent) and `cu29::planner::Pinned`; any other type is an out-of-tree
+/// absent), `cu29::planner::Pinned`, and the exact-plan consumer
+/// `cu29::planner::Fixed` (`config: { "plan": { ... } }`). Any other type is an out-of-tree
 /// planner resolved at build time by `cu29::planner::emit_plan` in the
 /// application's `build.rs`.
 #[derive(Serialize, Deserialize, Debug, Clone)]

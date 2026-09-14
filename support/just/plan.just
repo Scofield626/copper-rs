@@ -1,6 +1,36 @@
 # Shared schedule visualizer used by the workspace and example-local Justfiles.
 PLAN_WORKSPACE_ROOT := source_directory() + "/../.."
 
+# Validate serial or multicore scheduling constraints without running the plan.
+[positional-arguments]
+plan-validate config="copperconfig.ron" plan="plan.ron" features="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "{{invocation_directory()}}"
+  args=("$1" --validate-plan "$2")
+  [[ -z "$3" ]] || args+=(--features "$3")
+  cargo run --manifest-path "{{PLAN_WORKSPACE_ROOT}}/Cargo.toml" -p cu29-runtime --bin cu29-plan -- "${args[@]}"
+
+# Export every mission's exact process-step sequence as editable RON.
+[positional-arguments]
+plan-export config="copperconfig.ron" output="plan.ron" features="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "{{invocation_directory()}}"
+  args=("$1" --export-plan "$2")
+  [[ -z "$3" ]] || args+=(--features "$3")
+  cargo run --manifest-path "{{PLAN_WORKSPACE_ROOT}}/Cargo.toml" -p cu29-runtime --bin cu29-plan -- "${args[@]}"
+
+# Validate a saved plan and embed it into a config for compilation.
+[positional-arguments]
+plan-import config="copperconfig.ron" plan="plan.ron" output="copperconfig-fixed.ron" features="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "{{invocation_directory()}}"
+  args=("$1" --import-plan "$2" --write-config "$3")
+  [[ -z "$4" ]] || args+=(--features "$4")
+  cargo run --manifest-path "{{PLAN_WORKSPACE_ROOT}}/Cargo.toml" -p cu29-runtime --bin cu29-plan -- "${args[@]}"
+
 # Render the generated schedule for a config in the invocation directory.
 [positional-arguments]
 plan *options:

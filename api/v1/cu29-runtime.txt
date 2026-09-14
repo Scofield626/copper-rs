@@ -1802,6 +1802,40 @@ pub fn cu29_runtime::payload::CuArrayVec<T, N>::short_type_path() -> &'static st
 pub fn cu29_runtime::payload::CuArrayVec<T, N>::type_ident() -> core::option::Option<&'static str>
 pub fn cu29_runtime::payload::CuArrayVec<T, N>::type_path() -> &'static str
 pub mod cu29_runtime::planner
+pub enum cu29_runtime::planner::CuPlanPlacement
+pub cu29_runtime::planner::CuPlanPlacement::Main
+pub cu29_runtime::planner::CuPlanPlacement::Worker
+pub cu29_runtime::planner::CuPlanPlacement::Worker::index: u32
+pub cu29_runtime::planner::CuPlanPlacement::Worker::pool: alloc::string::String
+pub struct cu29_runtime::planner::CuMissionPlan
+pub cu29_runtime::planner::CuMissionPlan::copperlists_per_cycle: u32
+pub cu29_runtime::planner::CuMissionPlan::dependencies: alloc::vec::Vec<cu29_runtime::planner::CuPlanDependency>
+pub cu29_runtime::planner::CuMissionPlan::lanes: alloc::vec::Vec<cu29_runtime::planner::CuPlanLane>
+pub cu29_runtime::planner::CuMissionPlan::steps: alloc::vec::Vec<cu29_runtime::planner::CuPlanStep>
+pub struct cu29_runtime::planner::CuPlan
+pub cu29_runtime::planner::CuPlan::missions: alloc::collections::btree::map::BTreeMap<alloc::string::String, cu29_runtime::planner::CuMissionPlan>
+pub cu29_runtime::planner::CuPlan::version: u32
+impl cu29_runtime::planner::CuPlan
+pub fn cu29_runtime::planner::CuPlan::deserialize_ron(text: &str) -> cu29_traits::CuResult<Self>
+pub fn cu29_runtime::planner::CuPlan::from_config(config: &cu29_runtime::config::CuConfig) -> cu29_traits::CuResult<Self>
+pub fn cu29_runtime::planner::CuPlan::read(path: &std::path::Path) -> cu29_traits::CuResult<Self>
+pub fn cu29_runtime::planner::CuPlan::serialize_ron(&self) -> cu29_traits::CuResult<alloc::string::String>
+pub fn cu29_runtime::planner::CuPlan::validate(&self, config: &cu29_runtime::config::CuConfig) -> cu29_traits::CuResult<()>
+pub fn cu29_runtime::planner::CuPlan::write(&self, path: &std::path::Path) -> cu29_traits::CuResult<()>
+pub struct cu29_runtime::planner::CuPlanDependency
+pub cu29_runtime::planner::CuPlanDependency::cycle_lag: u32
+pub cu29_runtime::planner::CuPlanDependency::from: u32
+pub cu29_runtime::planner::CuPlanDependency::to: u32
+pub struct cu29_runtime::planner::CuPlanLane
+pub cu29_runtime::planner::CuPlanLane::placement: cu29_runtime::planner::CuPlanPlacement
+pub cu29_runtime::planner::CuPlanLane::steps: alloc::vec::Vec<u32>
+pub struct cu29_runtime::planner::CuPlanStep
+pub cu29_runtime::planner::CuPlanStep::copperlist: u32
+pub cu29_runtime::planner::CuPlanStep::key: alloc::string::String
+pub struct cu29_runtime::planner::Fixed
+impl cu29_runtime::planner::Fixed
+pub fn cu29_runtime::planner::Fixed::apply(&self, config: &mut cu29_runtime::config::CuConfig) -> cu29_traits::CuResult<()>
+pub fn cu29_runtime::planner::Fixed::new(plan: cu29_runtime::planner::CuPlan) -> cu29_traits::CuResult<Self>
 pub struct cu29_runtime::planner::Linearity
 impl cu29_runtime::planner::CuPlanner for cu29_runtime::planner::Linearity
 pub fn cu29_runtime::planner::Linearity::new(_config: core::option::Option<&cu29_runtime::config::ComponentConfig>) -> cu29_traits::CuResult<Self>
