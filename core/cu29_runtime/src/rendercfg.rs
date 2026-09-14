@@ -603,7 +603,7 @@ fn build_section_layout(
                 match config::resolve_task_kind_for_id(section.graph, node_idx)? {
                     config::TaskKind::Source => SOURCE_HEADER_BG,
                     config::TaskKind::Sink => SINK_HEADER_BG,
-                    config::TaskKind::Regular => TASK_HEADER_BG,
+                    config::TaskKind::Regular | config::TaskKind::Stateless => TASK_HEADER_BG,
                 }
             }
         };

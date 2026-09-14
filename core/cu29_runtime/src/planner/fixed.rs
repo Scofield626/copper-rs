@@ -69,7 +69,7 @@ impl CuPlan {
             let plan = assemble_runtime_plan_for_mission(config, graph, &mission)?;
             missions.insert(
                 mission.clone(),
-                PlanShape::new(&plan, &mission)?.serial_plan()?,
+                PlanShape::new(&plan, graph, &mission)?.serial_plan()?,
             );
         }
         Ok(Self {
@@ -94,7 +94,7 @@ impl CuPlan {
         }
         for (mission, graph) in missions {
             let canonical = assemble_runtime_plan_with_planner(config, graph, &Linearity)?;
-            let shape = PlanShape::new(&canonical, &mission)?;
+            let shape = PlanShape::new(&canonical, graph, &mission)?;
             self.missions[&mission]
                 .validate(config, &shape)
                 .map_err(|e| CuError::from(format!("Plan for mission '{mission}': {e}")))?;

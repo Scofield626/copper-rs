@@ -105,6 +105,7 @@ option select recorded runs identified by `Instantiated` lifecycle records.
   plan format, and `cu29-plan --export-plan` / `--validate-plan` / `--import-plan`.
   Multicore and multi-CopperList representation/validation are supported;
   fixed execution currently supports only one main lane and one CL per cycle.
+- `CuStatelessTask` and the `kind: stateless_task` RON task kind.
 - LogStream session manifests and `ReceiverRequirements` decoder geometry/bounds.
 - `remote-debug` feature and `cu29::remote_debug`.
 - `parallel-rt` feature and parallel executor APIs.

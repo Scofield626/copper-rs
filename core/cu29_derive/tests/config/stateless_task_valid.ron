@@ -1,0 +1,45 @@
+(
+    tasks: [
+        (
+            id: "src",
+            type: "IntSource",
+            kind: source,
+            run_in_sim: true,
+        ),
+        (
+            id: "features",
+            type: "Features",
+            kind: stateless_task,
+            run_in_sim: true,
+        ),
+        (
+            id: "tail",
+            type: "Features",
+            kind: stateless_task,
+            run_in_sim: true,
+        ),
+        (
+            id: "sink",
+            type: "IntSink",
+            kind: sink,
+            run_in_sim: true,
+        ),
+    ],
+    cnx: [
+        (
+            src: "src",
+            dst: "features",
+            msg: "i32",
+        ),
+        (
+            src: "src",
+            dst: "tail",
+            msg: "i32",
+        ),
+        (
+            src: "features",
+            dst: "sink",
+            msg: "i32",
+        ),
+    ],
+)

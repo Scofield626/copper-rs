@@ -950,6 +950,10 @@ pub enum TaskKind {
     Regular,
     #[serde(rename = "sink", alias = "snk")]
     Sink,
+    /// A transform implementing `CuStatelessTask`. Its invocations for
+    /// different CopperLists do not need to run in CopperList order.
+    #[serde(rename = "stateless_task")]
+    Stateless,
 }
 
 impl TaskKind {
@@ -959,6 +963,7 @@ impl TaskKind {
             TaskKind::Source => "source",
             TaskKind::Regular => "task",
             TaskKind::Sink => "sink",
+            TaskKind::Stateless => "stateless_task",
         }
     }
 }
@@ -1244,6 +1249,12 @@ impl Node {
     #[allow(dead_code)]
     pub fn set_task_kind(&mut self, kind: Option<TaskKind>) {
         self.kind = kind;
+    }
+
+    /// Whether this node declares `kind: stateless_task`.
+    #[allow(dead_code)]
+    pub fn is_stateless_task(&self) -> bool {
+        self.kind == Some(TaskKind::Stateless)
     }
 
     #[allow(dead_code)]
@@ -2221,6 +2232,9 @@ fn validate_task_kind(
         TaskKind::Sink if !has_inputs => Err(CuError::from(format!(
             "Task '{node_id}' is declared as kind 'sink' but has no incoming connections. Sinks need at least one input connection so Copper can determine their input message type."
         ))),
+        TaskKind::Stateless if !has_inputs => Err(CuError::from(format!(
+            "Task '{node_id}' is declared as kind 'stateless_task' but has no incoming connections. Stateless tasks map to CuStatelessTask and need at least one input connection."
+        ))),
         _ => Ok(()),
     }
 }
@@ -2263,6 +2277,12 @@ pub fn resolve_task_kind_for_id(graph: &CuGraph, node_id: NodeId) -> CuResult<Ta
 
     if let Some(kind) = node.get_declared_task_kind() {
         validate_task_kind(node.id.as_str(), kind, has_inputs, has_outputs)?;
+        if kind == TaskKind::Stateless && node.is_background() {
+            return Err(CuError::from(format!(
+                "Task '{}' is declared as kind 'stateless_task' and background. Stateless tasks run in the foreground; use kind: task for a background task.",
+                node.id
+            )));
+        }
         return Ok(kind);
     }
 
@@ -4052,6 +4072,12 @@ fn validate_anytime_graph(graph: &CuGraph, rate_target_hz: Option<u64>) -> CuRes
         anytime.validate(&node.id)?;
 
         let kind = resolve_task_kind_for_id(graph, node_id)?;
+        if kind == TaskKind::Stateless {
+            return Err(CuError::from(format!(
+                "Task '{}' is declared with an anytime: policy and kind 'stateless_task'. Anytime tasks implement CuAnytimeTask; use kind: task.",
+                node.id
+            )));
+        }
         if kind != TaskKind::Regular {
             return Err(CuError::from(format!(
                 "Task '{}' is declared with an anytime: policy but resolves to kind '{}'. Anytime refinement needs both an input and an output, so it is only supported on regular tasks.",
@@ -4234,7 +4260,7 @@ impl CuConfig {
                 Flavor::Task => match resolve_task_kind_for_id(graph, node_idx)? {
                     TaskKind::Source => "#ddefc7",
                     TaskKind::Sink => "#cce0ff",
-                    TaskKind::Regular => "#f2f2f2",
+                    TaskKind::Regular | TaskKind::Stateless => "#f2f2f2",
                 },
             };
 
@@ -6960,6 +6986,55 @@ mod tests {
         assert!(serialized.contains("kind: source"));
         assert!(serialized.contains("kind: task"));
         assert!(serialized.contains("kind: sink"));
+    }
+
+    fn stateless_task_config(features: &str, cnx: &str) -> CuConfig {
+        CuConfig::deserialize_ron(&format!(
+            r#"(
+            tasks: [(id: "src", type: "a"), (id: "features", type: "b", kind: stateless_task{features})],
+            cnx: [{cnx}],
+        )"#
+        ))
+        .unwrap()
+    }
+
+    fn resolve_features_kind(config: &CuConfig) -> CuResult<TaskKind> {
+        let graph = config.get_graph(None).unwrap();
+        resolve_task_kind_for_id(graph, graph.get_node_id_by_name("features").unwrap())
+    }
+
+    #[test]
+    fn test_stateless_task_kind_roundtrip_and_shape() {
+        let config = stateless_task_config("", r#"(src: "src", dst: "features", msg: "msg::A")"#);
+        assert_eq!(resolve_features_kind(&config).unwrap(), TaskKind::Stateless);
+        let graph = config.get_graph(None).unwrap();
+        let features = graph
+            .get_node(graph.get_node_id_by_name("features").unwrap())
+            .unwrap();
+        assert!(features.is_stateless_task());
+        assert!(
+            config
+                .serialize_ron()
+                .unwrap()
+                .contains("kind: stateless_task")
+        );
+
+        let input_free =
+            stateless_task_config("", r#"(src: "features", dst: "src", msg: "msg::A")"#);
+        let err = resolve_features_kind(&input_free).unwrap_err();
+        assert!(err.to_string().contains("no incoming connections"), "{err}");
+    }
+
+    #[test]
+    fn test_stateless_task_rejects_background_and_anytime() {
+        let cnx = r#"(src: "src", dst: "features", msg: "msg::A")"#;
+        let background = stateless_task_config(", background: true", cnx);
+        let err = resolve_features_kind(&background).unwrap_err();
+        assert!(err.to_string().contains("background"), "{err}");
+
+        let anytime = stateless_task_config(", anytime: (max_refines: 1)", cnx);
+        let err = anytime.validate_anytime_configs().unwrap_err();
+        assert!(err.to_string().contains("CuAnytimeTask"), "{err}");
     }
 
     #[test]

@@ -2301,6 +2301,7 @@ impl<
 /// Copper tasks can be of 3 types:
 /// - Source: only producing output messages (usually used for drivers)
 /// - Regular: processing input messages and producing output messages, more like compute nodes.
+///   Both `CuTask` and `CuStatelessTask` implementations have this shape.
 /// - Sink: only consuming input messages (usually used for actuators)
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum CuTaskType {
@@ -2313,7 +2314,7 @@ impl From<TaskKind> for CuTaskType {
     fn from(value: TaskKind) -> Self {
         match value {
             TaskKind::Source => CuTaskType::Source,
-            TaskKind::Regular => CuTaskType::Regular,
+            TaskKind::Regular | TaskKind::Stateless => CuTaskType::Regular,
             TaskKind::Sink => CuTaskType::Sink,
         }
     }

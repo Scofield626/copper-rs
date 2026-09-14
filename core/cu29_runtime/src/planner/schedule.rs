@@ -4,6 +4,7 @@ use super::AssembledPlan;
 use super::PlanEntityKind;
 use super::fixed::execution_keys;
 use crate::config::CuConfig;
+use crate::config::CuGraph;
 use crate::curuntime::CuExecutionUnit;
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
@@ -94,11 +95,13 @@ pub struct CuPlanDependency {
 pub(super) struct PlanShape {
     keys: Vec<String>,
     required: BTreeSet<(usize, usize)>,
+    /// Steps of each task or bridge instance whose mutable state orders its
+    /// calls across CopperLists. Stateless tasks are not listed.
     components: Vec<Vec<usize>>,
 }
 
 impl PlanShape {
-    pub(super) fn new(plan: &AssembledPlan, mission: &str) -> CuResult<Self> {
+    pub(super) fn new(plan: &AssembledPlan, graph: &CuGraph, mission: &str) -> CuResult<Self> {
         let keys = execution_keys(plan, mission)?;
         let mut producers = BTreeMap::new();
         let mut entities: BTreeMap<_, Vec<usize>> = BTreeMap::new();
@@ -112,7 +115,18 @@ impl PlanShape {
             }
             entities.entry(step.node_id).or_default().push(index);
             let component = match plan.entities[step.node_id as usize].kind {
-                PlanEntityKind::Task { task_index, .. } => (0, task_index),
+                PlanEntityKind::Task {
+                    original_node_id,
+                    task_index,
+                } => {
+                    let node = graph.get_node(original_node_id).ok_or_else(|| {
+                        CuError::from(format!("Task node {original_node_id} not found"))
+                    })?;
+                    if node.is_stateless_task() {
+                        continue;
+                    }
+                    (0, task_index)
+                }
                 PlanEntityKind::BridgeRx {
                     bridge_config_index,
                     ..
@@ -626,6 +640,113 @@ mod tests {
                 },
             ]);
         plan.validate(&config).unwrap();
+    }
+
+    fn fork_join(features_kind: &str) -> CuConfig {
+        CuConfig::deserialize_ron(&format!(
+            r#"(
+            runtime: (thread_pools: [(id: "rt", threads: 3)]),
+            tasks: [(id: "source", type: "Source"), (id: "filter", type: "Filter"),
+                (id: "features", type: "Features", kind: {features_kind}), (id: "fuse", type: "Fuse")],
+            cnx: [(src: "source", dst: "filter", msg: "u32"), (src: "source", dst: "features", msg: "u32"),
+                (src: "filter", dst: "fuse", msg: "u32"), (src: "features", dst: "fuse", msg: "u32")],
+        )"#
+        ))
+        .unwrap()
+    }
+
+    /// Ordered tasks share worker 0, which releases `source(CL 1)` before
+    /// `fuse(CL 0)`. `features(CL 0)` and `features(CL 1)` run on workers 1
+    /// and 2 with only their own CL's data edges, so nothing orders them.
+    fn overlapping_features(config: &CuConfig) -> CuPlan {
+        let mut plan = CuPlan::from_config(config).unwrap();
+        let mission = plan.missions.get_mut("default").unwrap();
+        let first = mission.steps.clone();
+        let per_cl = first.len() as u32;
+        mission.steps.extend(first.iter().cloned().map(|mut step| {
+            step.copperlist = 1;
+            step
+        }));
+        mission.copperlists_per_cycle = 2;
+        let index = |task: &str, cl: u32| {
+            let needle = format!("task:{task}|");
+            first
+                .iter()
+                .position(|step| step.key.contains(&needle))
+                .unwrap() as u32
+                + cl * per_cl
+        };
+        let ordered = [
+            ("source", 0),
+            ("filter", 0),
+            ("source", 1),
+            ("filter", 1),
+            ("fuse", 0),
+            ("fuse", 1),
+        ]
+        .map(|(task, cl)| index(task, cl));
+        mission.lanes = vec![
+            worker(0, ordered.to_vec()),
+            worker(1, vec![index("features", 0)]),
+            worker(2, vec![index("features", 1)]),
+        ];
+        mission.dependencies = (0..2)
+            .flat_map(|cl| {
+                [("source", "features"), ("features", "fuse")].map(|(from, to)| CuPlanDependency {
+                    from: index(from, cl),
+                    to: index(to, cl),
+                    cycle_lag: 0,
+                })
+            })
+            .collect();
+        plan
+    }
+
+    #[test]
+    fn stateless_task_invocations_may_overlap_across_copperlists() {
+        let stateless = fork_join("stateless_task");
+        overlapping_features(&stateless)
+            .validate(&stateless)
+            .unwrap();
+
+        let ordered = fork_join("task");
+        let err = overlapping_features(&ordered)
+            .validate(&ordered)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Missing precedence")
+                && err.to_string().contains("task:features"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn stateless_task_keeps_its_own_copperlist_data_dependencies() {
+        let config = fork_join("stateless_task");
+        let mut plan = overlapping_features(&config);
+        plan.missions.get_mut("default").unwrap().dependencies.pop();
+        let err = plan.validate(&config).unwrap_err();
+        assert!(err.to_string().contains("Missing precedence"), "{err}");
+    }
+
+    #[test]
+    fn exported_plan_has_no_state_edges_for_stateless_tasks() {
+        let self_edges = |kind: &str| {
+            let plan = CuPlan::from_config(&fork_join(kind)).unwrap();
+            let mission = &plan.missions["default"];
+            let features = mission
+                .steps
+                .iter()
+                .position(|step| step.key.contains("task:features|"))
+                .unwrap() as u32;
+            mission
+                .dependencies
+                .iter()
+                .filter(|edge| edge.from == features && edge.to == features)
+                .count()
+        };
+        assert_eq!(self_edges("task"), 1);
+        assert_eq!(self_edges("stateless_task"), 0);
     }
 
     #[test]

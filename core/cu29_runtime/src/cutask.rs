@@ -591,6 +591,96 @@ pub trait CuTask: Freezable + Reflect {
     }
 }
 
+/// A transform task whose invocations are independent of each other.
+///
+/// Select it with `kind: stateless_task` in the task's RON entry. Per-CopperList
+/// calls take `&self`, so the runtime can share one instance between workers
+/// and let invocations for different CopperLists overlap. Each invocation still
+/// waits for its own inputs and writes only its own CopperList's output.
+///
+/// Implementing this trait declares that an invocation does not depend on
+/// earlier invocations and has no external effect whose meaning depends on
+/// invocation order. Immutable configuration is allowed; an accumulator is
+/// not, even behind a lock, because its result would depend on call order.
+/// `Send + Sync` make sharing memory-safe; they do not prove independence.
+///
+/// Construction, [`start`](Self::start), [`stop`](Self::stop), and
+/// [`Freezable::thaw`] have exclusive access and never overlap invocations.
+pub trait CuStatelessTask: Freezable + Reflect + Send + Sync {
+    type Input<'m>: CuMsgPack;
+    type Output<'m>: CuMsgPayload;
+    /// Resources required by the task.
+    type Resources<'r>;
+
+    /// Registers the reflected type used as this task's debug-state contract.
+    ///
+    /// The default exposes the task struct itself. Override this when the task
+    /// contains ignored, third-party, hardware, or otherwise non-inspectable
+    /// internals and should expose a purpose-built debug-state view instead.
+    fn register_debug_state_types(registry: &mut TypeRegistry)
+    where
+        Self: GetTypeRegistration + Sized,
+    {
+        registry.register::<Self>();
+    }
+
+    /// Returns the reflected type path used as this task's debug-state schema.
+    fn debug_state_type_path() -> &'static str
+    where
+        Self: TypePath + Sized,
+    {
+        Self::type_path()
+    }
+
+    /// Borrows this task's current debug-state view.
+    ///
+    /// Override this together with [`debug_state_type_path`](Self::debug_state_type_path)
+    /// when the debug state is a projected view rather than the task struct.
+    fn with_debug_state<R>(&self, f: impl FnOnce(&dyn Reflect) -> R) -> R
+    where
+        Self: Sized,
+    {
+        f(self)
+    }
+
+    /// Here you need to initialize everything your task will need for the duration of its lifetime.
+    /// The config allows you to access the configuration of the task.
+    fn new(_config: Option<&ComponentConfig>, _resources: Self::Resources<'_>) -> CuResult<Self>
+    where
+        Self: Sized;
+
+    /// Start is called between the creation of the task and the first call to pre/process.
+    fn start(&mut self, _ctx: &CuContext) -> CuResult<()> {
+        Ok(())
+    }
+
+    /// Called before "process" for each CopperList. It follows the same
+    /// independence contract as [`process`](Self::process).
+    fn preprocess(&self, _ctx: &CuContext) -> CuResult<()> {
+        Ok(())
+    }
+
+    /// Derives this CopperList's output from its input without depending on
+    /// other invocations.
+    fn process<'i, 'o>(
+        &self,
+        ctx: &CuContext,
+        input: &Self::Input<'i>,
+        output: &mut Self::Output<'o>,
+    ) -> CuResult<()>;
+
+    /// Called after "process" for each CopperList. It follows the same
+    /// independence contract as [`process`](Self::process).
+    fn postprocess(&self, _ctx: &CuContext) -> CuResult<()> {
+        Ok(())
+    }
+
+    /// Called to stop the task. It signals that the *process method won't be called until start is called again.
+    fn stop(&mut self, _ctx: &CuContext) -> CuResult<()> {
+        Ok(())
+    }
+}
+
 /// A Sink Task is a task that only consumes messages. For example drivers for actuators are Sink Tasks.
 pub trait CuSinkTask: Freezable + Reflect {
     type Input<'m>: CuMsgPack;

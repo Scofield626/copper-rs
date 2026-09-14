@@ -1,0 +1,8 @@
+error: Task 'features' is declared as kind 'stateless_task' and background. Stateless tasks run in the foreground; use kind: task for a background task.
+          context:None
+ --> tests/compile_fail/copper_runtime/stateless_background.rs:3:1
+  |
+3 | #[copper_runtime(config = "config/stateless_background_invalid.ron", sim_mode = true, ignore_resources = true)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `copper_runtime` (in Nightly builds, run with -Z macro-backtrace for more info)

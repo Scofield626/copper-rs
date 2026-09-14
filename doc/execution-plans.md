@@ -109,9 +109,34 @@ and no cycle among same-cycle dependency and lane-order edges. Message
 producers must finish before consumers; anytime base and refinement phases
 must stay ordered. Calls sharing a mutable task or bridge instance must be
 ordered within a CL and across consecutive CLs, including the cycle boundary.
+Stateless tasks are the exception, as described below.
 Dependencies may satisfy these constraints transitively. The exporter includes
 required data/phase/state edges so an optimizer can move independent work to
 separate lanes without reconstructing the graph's constraints.
+
+## Stateless tasks
+
+A transform whose invocations are independent implements `CuStatelessTask`
+and declares `kind: stateless_task`:
+
+```ron
+(id: "features", type: "tasks::Features", kind: stateless_task),
+```
+
+`preprocess`, `process`, and `postprocess` take `&self`, and the task is
+`Send + Sync`, so one instance can serve several workers. Construction,
+`start`, `stop`, and `thaw` keep exclusive access. Implementing the trait also
+declares that an invocation does not depend on earlier invocations and has no
+effect whose meaning depends on invocation order. Configuring an ordinary
+`CuTask` with this kind fails compilation. Stateless tasks cannot be
+`background` or `anytime`.
+
+A plan need not order a stateless task's occurrences across CopperLists.
+The exporter omits those state edges, and the validator accepts, for example,
+`features` for CL 0 and CL 1 on two workers with nothing between them. Each
+occurrence still waits for its own CL's inputs, and every consumer still waits
+for its own CL's output. The serial executor calls stateless tasks in plan
+order like any other task.
 
 This structural validator does not prove timing/deadline feasibility, bounded
 buffer feasibility, OS CPU availability, or contention safety for arbitrary

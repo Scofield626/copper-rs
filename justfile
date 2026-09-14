@@ -178,12 +178,12 @@ test:
 # Execution-plan serialization, validation, code generation, and replay checks.
 plan-check:
 	cargo test -p cu29-runtime --lib planner::
-	cargo test -p cu29-runtime --test fixed_plan --test replay_anytime --bin cu29-plan
+	cargo test -p cu29-runtime --test fixed_plan --test stateless_task --test replay_anytime --bin cu29-plan
 	cargo test -p cu29-derive --lib
 	cargo test -p cu29-export --lib logstats::
 	cargo test -p cu29-runtime --doc planner::
 	cargo clippy -p cu29-runtime -p cu29-derive -p cu29-export --lib -- --deny warnings
-	cargo clippy -p cu29-runtime --bin cu29-plan --test fixed_plan -- --deny warnings
+	cargo clippy -p cu29-runtime --bin cu29-plan --test fixed_plan --test stateless_task -- --deny warnings
 	cargo check -p cu29-runtime --no-default-features
 
 # DAG rendering, resource usage labels, and config parsing regressions.

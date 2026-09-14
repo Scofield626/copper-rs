@@ -661,6 +661,7 @@ fn inferred_output_name(node: &Node, task_type: CuTaskType) -> String {
     }
     let task_trait = match task_type {
         CuTaskType::Source => "cu29::cutask::CuSrcTask",
+        CuTaskType::Regular if node.is_stateless_task() => "cu29::cutask::CuStatelessTask",
         CuTaskType::Regular => "cu29::cutask::CuTask",
         CuTaskType::Sink => unreachable!("sinks do not have inferred outputs"),
     };
