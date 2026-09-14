@@ -286,7 +286,8 @@ measurement, and is written beside every candidate and reported beside its measu
 **Analytical model.** The unit is the lane (the paper's region): a fixed sequence on one
 worker. An occurrence's expected cost is its profiled fired cost weighted by its firing
 probability per CL, plus its skipped cost otherwise; a background gateway costs nothing
-(its compute runs on its pool). With `C_i` the cost of lane `i` per cycle, `T_i` its
+(its compute runs on its pool). Lane load, response and rate use the expected cost; a
+chain is timed with the fired costs, since its latency is paid in the cycles it runs in. With `C_i` the cost of lane `i` per cycle, `T_i` its
 period (the CL period times `k`), `g` the dispatch granularity, and `hp(i)` the
 higher-priority lanes on the same CPU, the response time is the paper's fixpoint
 

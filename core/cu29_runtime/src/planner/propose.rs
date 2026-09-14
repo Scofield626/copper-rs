@@ -213,7 +213,7 @@ impl Model {
             let expected =
                 operation.fired.mean_ns * fired + operation.skipped.mean_ns * (1.0 - fired);
             cost.push(expected as u64);
-            fired_cost.push(operation.fired.mean_ns as u64);
+            fired_cost.push(operation.fired.mean_ns.max(operation.skipped.mean_ns) as u64);
         }
         let mut preds: Vec<Vec<usize>> = vec![Vec::new(); units.len()];
         for edge in &inventory.dependencies {
@@ -978,7 +978,7 @@ mod tests {
             .operations
             .get_mut("mission:default|task:left|phase:whole")
             .unwrap();
-        left.fired = CuCostStats::from_samples(&mut vec![3_000_000; 10]);
+        left.fired = CuCostStats::from_samples(&mut [3_000_000; 10]);
         left.skipped = CuCostStats::from_samples(&mut vec![1_000; 90]);
         let one = contract(vec![0]);
         let serial = propose(&request(&config, &one, &profile, 1)).unwrap();

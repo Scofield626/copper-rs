@@ -53,7 +53,8 @@ pub struct CuScoreTable {
 
 impl CuScoreTable {
     /// Ranks `measured` (candidate name to its profile) by the contract's
-    /// objective; `predictions` supplies the model's numbers for comparison.
+    /// objective; `predictions` supplies the model's numbers for comparison,
+    /// keyed by the candidate's name up to a `/`.
     pub fn new(
         contract: &CuContract,
         predictions: &BTreeMap<String, CuPrediction>,
@@ -72,7 +73,10 @@ impl CuScoreTable {
         }
         let mut rows = Vec::with_capacity(measured.len());
         for (candidate, profile) in measured {
-            let predicted = predictions.get(candidate);
+            // Rounds of one candidate are named `plan-1/r2`.
+            let predicted = predictions
+                .get(candidate)
+                .or_else(|| predictions.get(candidate.split('/').next().unwrap_or(candidate)));
             let mut chains = BTreeMap::new();
             let mut ratios = Vec::with_capacity(contract.chains.len());
             for chain in &contract.chains {
