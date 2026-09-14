@@ -10,6 +10,7 @@ use alloc::collections::BTreeSet;
 use alloc::collections::VecDeque;
 use alloc::format;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 use cu29_traits::CuError;
 use cu29_traits::CuResult;
@@ -300,10 +301,55 @@ pub struct CuChainProfile {
 pub struct CuSourceProfile {
     pub period_ms: u32,
     pub fired: u64,
-    /// Firings the period allows in the window.
+    /// Intervals of the period the window holds.
     pub expected: f64,
-    /// `fired / expected`.
+    /// `(fired - 1) / expected`: the intervals between firings over the
+    /// intervals the period allows.
     pub delivered_rate: f64,
+}
+
+/// A stable identity of one mission graph: its nodes, types and edges. A
+/// profile applies only to a config with the same signature.
+pub fn graph_signature(graph: &crate::config::CuGraph, mission: Option<&str>) -> String {
+    let mut parts = Vec::new();
+    parts.push(format!("mission={}", mission.unwrap_or("default")));
+    let mut nodes: Vec<_> = graph.get_all_nodes();
+    nodes.sort_by_key(|a| a.1.get_id());
+    for (_, node) in nodes {
+        let flavor = match node.get_flavor() {
+            Flavor::Task => "task",
+            Flavor::Bridge => "bridge",
+        };
+        parts.push(format!(
+            "node|{}|{}|{flavor}",
+            node.get_id(),
+            node.get_type()
+        ));
+    }
+    let endpoint = |node: &str, channel: Option<&str>| match channel {
+        Some(channel) => format!("{node}/{channel}"),
+        None => node.to_string(),
+    };
+    let mut edges: Vec<String> = graph
+        .edges()
+        .map(|cnx| {
+            format!(
+                "edge|{}|{}|{}",
+                endpoint(cnx.src.as_str(), cnx.src_channel.as_deref()),
+                endpoint(cnx.dst.as_str(), cnx.dst_channel.as_deref()),
+                cnx.msg
+            )
+        })
+        .collect();
+    edges.sort();
+    parts.extend(edges);
+    let joined = parts.join("\n");
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in joined.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("fnv1a64:{hash:016x}")
 }
 
 impl CuProfile {

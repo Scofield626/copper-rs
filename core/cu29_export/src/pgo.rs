@@ -2,10 +2,10 @@
 //! chain latencies and delivered source rates from one recorded run.
 
 use crate::copperlists_reader;
-use crate::logstats::graph_signature;
 use cu29::clock::Tov;
 use cu29::config::{CuConfig, DEFAULT_MISSION_ID};
 use cu29::curuntime::{CuExecutionUnit, CuStepPhase, CuTaskType};
+use cu29::planner::graph_signature;
 use cu29::planner::{
     CuChainProfile, CuContract, CuCostStats, CuOperationProfile, CuProfile, CuSourceProfile,
     PlanEntityKind, assemble_runtime_plan_for_mission, step_key,
@@ -209,17 +209,17 @@ where
     }
     for source in &contract.sources {
         let fired = source_fired[source.task.as_str()];
-        // The window spans the intervals between firings, one fewer than
-        // the firings it can hold.
-        let expected = window_ns as f64 / (f64::from(source.period_ms) * 1e6) + 1.0;
+        // The window spans intervals between firings: `n` firings make
+        // `n - 1` of them, against the intervals the period allows.
+        let expected = window_ns as f64 / (f64::from(source.period_ms) * 1e6);
         profile.sources.insert(
             source.task.clone(),
             CuSourceProfile {
                 period_ms: source.period_ms,
                 fired,
                 expected,
-                delivered_rate: if expected > 0.0 {
-                    fired as f64 / expected
+                delivered_rate: if expected > 0.0 && fired > 0 {
+                    (fired - 1) as f64 / expected
                 } else {
                     0.0
                 },

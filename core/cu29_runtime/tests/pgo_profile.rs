@@ -155,7 +155,7 @@ fn profile_reports_operations_chains_and_source_rates() {
 
     let source = &profile.sources["src"];
     assert_eq!((source.period_ms, source.fired), (1, ITERATIONS / 2));
-    assert!(source.expected > 1.0 && source.delivered_rate > 0.0);
+    assert!(source.expected > 0.0 && source.delivered_rate > 0.0);
     let firings = src.firing_rate_hz * profile.window_ns as f64 / 1e9;
     assert!(
         (firings - (ITERATIONS / 2 - 1) as f64).abs() < 1e-6,

@@ -162,10 +162,16 @@ impl CuPlan {
             .map(|mission| mission.max_in_flight as usize)
             .max()
             .unwrap_or(0);
-        let logging = config.logging.get_or_insert_with(Default::default);
-        let current = logging.copperlist_count.unwrap_or(DEFAULT_COPPERLIST_COUNT);
+        let current = config
+            .logging
+            .as_ref()
+            .and_then(|logging| logging.copperlist_count)
+            .unwrap_or(DEFAULT_COPPERLIST_COUNT);
         if needed > current {
-            logging.copperlist_count = Some(needed);
+            config
+                .logging
+                .get_or_insert_with(Default::default)
+                .copperlist_count = Some(needed);
         }
     }
 

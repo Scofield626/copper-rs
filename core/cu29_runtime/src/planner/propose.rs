@@ -34,6 +34,8 @@ const KICK: usize = 3;
 /// Two candidates whose sum tier differs by less than this fraction count as
 /// the same candidate.
 const MIN_SEPARATION: f64 = 0.01;
+/// A delivered rate this close to nominal counts as kept.
+const RATE_TOLERANCE: f64 = 0.005;
 
 /// What the proposer is asked to do.
 #[derive(Clone, Debug)]
@@ -91,13 +93,19 @@ pub struct CuWorkerPrediction {
     pub rate: f64,
 }
 
-/// The model's view of one mission plan's inventory: cost per occurrence,
+/// The model's view of one mission plan's inventory: cost per unit,
 /// dependency edges, and what each chain and source maps to.
+///
+/// A unit is one occurrence, or an anytime base occurrence with its refine
+/// occurrences: the executor runs those phases together on one worker, so
+/// the search never separates them.
 struct Model {
     inventory: CuMissionPlan,
-    /// Expected cost of each occurrence per cycle, in nanoseconds.
+    /// Occurrence indices of each unit, in phase order.
+    units: Vec<Vec<usize>>,
+    /// Expected cost of each unit per cycle, in nanoseconds.
     cost: Vec<u64>,
-    /// Zero-lag predecessors of each occurrence.
+    /// Zero-lag predecessor units of each unit.
     preds: Vec<Vec<usize>>,
     /// CopperList period, the dispatch granularity `g`.
     copperlist_ns: u64,
@@ -152,8 +160,34 @@ impl Model {
             .iter()
             .map(|entry| entry.task.as_str())
             .collect();
-        let mut cost = Vec::with_capacity(inventory.steps.len());
-        for step in &inventory.steps {
+        // A refine occurrence joins the unit of its task's base occurrence in
+        // the same CopperList; the profile measures the whole job under the
+        // base key.
+        let mut units: Vec<Vec<usize>> = Vec::new();
+        let mut unit_of = vec![usize::MAX; inventory.steps.len()];
+        for (index, step) in inventory.steps.iter().enumerate() {
+            if is_refine(&step.key) {
+                let base = inventory.steps.iter().position(|other| {
+                    other.copperlist == step.copperlist
+                        && !is_refine(&other.key)
+                        && task_of_key(&other.key) == task_of_key(&step.key)
+                });
+                let Some(base) = base.map(|b| unit_of[b]).filter(|&u| u != usize::MAX) else {
+                    return Err(CuError::from(format!(
+                        "Refine step '{}' has no base step before it",
+                        step.key
+                    )));
+                };
+                units[base].push(index);
+                unit_of[index] = base;
+            } else {
+                unit_of[index] = units.len();
+                units.push(vec![index]);
+            }
+        }
+        let mut cost = Vec::with_capacity(units.len());
+        for unit in &units {
+            let step = &inventory.steps[unit[0]];
             let task = task_of_key(&step.key);
             if task.is_some_and(|task| background.contains(task)) {
                 // The gateway only publishes and dispatches; the compute runs
@@ -169,25 +203,33 @@ impl Model {
                 operation.fired.mean_ns * fired + operation.skipped.mean_ns * (1.0 - fired);
             cost.push(expected as u64);
         }
-        let mut preds = vec![Vec::new(); inventory.steps.len()];
+        let mut preds: Vec<Vec<usize>> = vec![Vec::new(); units.len()];
         for edge in &inventory.dependencies {
-            if edge.cycle_lag == 0 {
-                preds[edge.to as usize].push(edge.from as usize);
+            let (from, to) = (unit_of[edge.from as usize], unit_of[edge.to as usize]);
+            if edge.cycle_lag == 0 && from != to && !preds[to].contains(&from) {
+                preds[to].push(from);
             }
         }
-        let occurrences_of = |task: &str| -> Vec<usize> {
+        // A task's unit at each CopperList offset.
+        let units_of = |task: &str| -> Vec<usize> {
             (0..inventory.copperlists_per_cycle)
                 .filter_map(|offset| {
-                    inventory.steps.iter().position(|step| {
-                        step.copperlist == offset && task_of_key(&step.key) == Some(task)
-                    })
+                    inventory
+                        .steps
+                        .iter()
+                        .position(|step| {
+                            step.copperlist == offset
+                                && !is_refine(&step.key)
+                                && task_of_key(&step.key) == Some(task)
+                        })
+                        .map(|index| unit_of[index])
                 })
                 .collect()
         };
         let mut chains = Vec::new();
         for chain in &contract.chains {
-            let sources = occurrences_of(&chain.source);
-            let sinks = occurrences_of(&chain.sink);
+            let sources = units_of(&chain.source);
+            let sinks = units_of(&chain.sink);
             if sources.len() != inventory.copperlists_per_cycle as usize
                 || sinks.len() != sources.len()
             {
@@ -201,11 +243,12 @@ impl Model {
         let sources = contract
             .sources
             .iter()
-            .map(|source| occurrences_of(&source.task))
+            .map(|source| units_of(&source.task))
             .collect();
         Ok(Self {
             cycle_ns: copperlist_ns * u64::from(inventory.copperlists_per_cycle),
             inventory,
+            units,
             cost,
             preds,
             copperlist_ns,
@@ -226,7 +269,7 @@ impl Model {
     /// Whether a lane order respects every zero-lag edge among its own
     /// occurrences and the whole cycle graph stays acyclic.
     fn is_valid(&self, assignment: &Assignment) -> bool {
-        let n = self.inventory.steps.len();
+        let n = self.units.len();
         let mut incoming = vec![0usize; n];
         let mut succs: Vec<Vec<usize>> = vec![Vec::new(); n];
         for (to, preds) in self.preds.iter().enumerate() {
@@ -280,15 +323,13 @@ impl Model {
             });
             load.push(cost as f64 / period as f64);
         }
-        // Timeline: each lane runs its occurrences in order; an occurrence
-        // starts when its lane is free and every predecessor has ended.
-        let n = self.inventory.steps.len();
+        // Timeline: each lane runs its units in order; a unit starts when its
+        // lane is free and every predecessor has ended.
+        let n = self.units.len();
         let mut lane_of = vec![0usize; n];
-        let mut index_in_lane = vec![0usize; n];
         for (l, lane) in lanes.iter().enumerate() {
-            for (i, &o) in lane.iter().enumerate() {
+            for &o in lane {
                 lane_of[o] = l;
-                index_in_lane[o] = i;
             }
         }
         let mut starts = vec![0u64; n];
@@ -303,9 +344,6 @@ impl Model {
                 let Some(&o) = lane.iter().find(|&&o| !done[o]) else {
                     continue;
                 };
-                if index_in_lane[o] > 0 && !done[lane[index_in_lane[o] - 1]] {
-                    continue;
-                }
                 if self.preds[o].iter().any(|&p| !done[p]) {
                     continue;
                 }
@@ -342,7 +380,7 @@ impl Model {
                     .fold(1.0f64, f64::min)
             })
             .collect();
-        let rate_deficit: f64 = source_rate.iter().map(|r| 1.0 - r).sum();
+        let rate_deficit: f64 = source_rate.iter().map(|&r| rate_deficit(r)).sum();
         let sum: f64 = chain_ratio.iter().sum();
         let max_load = load.iter().copied().fold(0.0f64, f64::max);
         let score = if self.deadline_objective {
@@ -401,6 +439,15 @@ fn task_of_key(key: &str) -> Option<&str> {
     key.split('|').find_map(|part| part.strip_prefix("task:"))
 }
 
+fn is_refine(key: &str) -> bool {
+    key.contains("|phase:refine:")
+}
+
+/// A source within `RATE_TOLERANCE` of its period keeps its rate.
+pub(super) fn rate_deficit(rate: f64) -> f64 {
+    (1.0 - RATE_TOLERANCE - rate).max(0.0)
+}
+
 /// A deterministic pseudo-random sequence for the search (splitmix64).
 struct Rng(u64);
 
@@ -422,7 +469,7 @@ impl Model {
     /// The start: occurrences in a topological order of the inventory, each
     /// placed on the least loaded CPU.
     fn start_plan(&self) -> Assignment {
-        let n = self.inventory.steps.len();
+        let n = self.units.len();
         let mut incoming = vec![0usize; n];
         let mut succs: Vec<Vec<usize>> = vec![Vec::new(); n];
         for (to, preds) in self.preds.iter().enumerate() {
@@ -456,6 +503,9 @@ impl Model {
     fn neighbour(&self, assignment: &Assignment, rng: &mut Rng) -> Assignment {
         let mut lanes = assignment.lanes.clone();
         let occupied: Vec<usize> = (0..lanes.len()).filter(|&l| !lanes[l].is_empty()).collect();
+        if occupied.is_empty() {
+            return assignment.clone();
+        }
         if rng.below(2) == 0 || lanes.len() == 1 {
             let from = occupied[rng.below(occupied.len())];
             let at = rng.below(lanes[from].len());
@@ -504,7 +554,7 @@ impl Model {
                 start.clone()
             } else {
                 let mut random = start.clone();
-                for _ in 0..self.inventory.steps.len() * 2 {
+                for _ in 0..self.units.len() * 2 {
                     let candidate = self.neighbour(&random, &mut rng);
                     if self.is_valid(&candidate) {
                         random = candidate;
@@ -587,7 +637,10 @@ impl Model {
                     cpu: Some(self.cpus[l]),
                     policy: self.policy,
                 },
-                steps: lane.iter().map(|&o| o as u32).collect(),
+                steps: lane
+                    .iter()
+                    .flat_map(|&u| self.units[u].iter().map(|&o| o as u32))
+                    .collect(),
             })
             .collect();
         mission.dispatcher = dispatcher;
@@ -695,6 +748,14 @@ pub fn propose(request: &ProposeRequest<'_>) -> CuResult<Vec<CuCandidate>> {
     request
         .contract
         .validate(request.config, Some(request.mission))?;
+    let graph = request.config.get_graph(Some(request.mission))?;
+    let signature = super::graph_signature(graph, Some(request.mission));
+    if request.profile.config_signature != signature {
+        return Err(CuError::from(format!(
+            "The profile was recorded on another graph ({}); this config's mission '{}' is {signature}",
+            request.profile.config_signature, request.mission
+        )));
+    }
     let mut exported = CuPlan::from_config_cyclic(request.config, request.copperlists_per_cycle)?;
     exported.concurrent_resources = request.contract.concurrent_safe_resources.clone();
     let inventory = exported
@@ -789,7 +850,11 @@ mod tests {
 
     /// `left` and `right` each cost 3 ms every CopperList; the rest is free.
     fn profile() -> CuProfile {
-        let mut profile = CuProfile::new("sig".into(), "default".into());
+        let graph = config().get_graph(Some("default")).unwrap().clone();
+        let mut profile = CuProfile::new(
+            crate::planner::graph_signature(&graph, Some("default")),
+            "default".into(),
+        );
         profile.copperlists = 100;
         profile.window_ns = 1_000_000_000;
         for (task, cost) in [
@@ -868,6 +933,66 @@ mod tests {
         // Both CopperLists of the cycle fit in one 20 ms cycle with three CPUs.
         assert!(best.prediction.chains["hot"].latency_ns <= 6_200_000);
         assert!(best.prediction.workers.values().all(|w| w.load < 1.0));
+    }
+
+    #[test]
+    fn anytime_phases_stay_together_on_one_worker() {
+        let config = CuConfig::deserialize_ron(
+            r#"(
+            runtime: (rate_target_hz: 100),
+            logging: (copperlist_count: 2),
+            tasks: [(id: "src", type: "Source"),
+                (id: "refiner", type: "Refiner", anytime: (max_refines: 2)),
+                (id: "sink", type: "Sink")],
+            cnx: [(src: "src", dst: "refiner", msg: "u32"), (src: "refiner", dst: "sink", msg: "u32")],
+        )"#,
+        )
+        .unwrap();
+        let graph = config.get_graph(Some("default")).unwrap();
+        let mut profile = CuProfile::new(
+            crate::planner::graph_signature(graph, Some("default")),
+            "default".into(),
+        );
+        profile.copperlists = 100;
+        profile.window_ns = 1_000_000_000;
+        for (key, cost) in [
+            ("mission:default|task:src|phase:whole", 100_000),
+            ("mission:default|task:refiner|phase:base", 3_000_000),
+            ("mission:default|task:sink|phase:whole", 100_000),
+        ] {
+            let mut samples = vec![cost; 100];
+            profile.operations.insert(
+                key.into(),
+                CuOperationProfile {
+                    fired: CuCostStats::from_samples(&mut samples),
+                    skipped: CuCostStats::default(),
+                    firing_rate_hz: 100.0,
+                },
+            );
+        }
+        let mut contract = contract(vec![0, 1]);
+        contract.chains[0].sink = "sink".into();
+        contract.max_in_flight = 1;
+        let candidates = propose(&request(&config, &contract, &profile, 1)).unwrap();
+        for candidate in &candidates {
+            let mission = &candidate.plan.missions["default"];
+            let refine = |key: &str| {
+                mission
+                    .steps
+                    .iter()
+                    .position(|s| s.key.contains(key))
+                    .unwrap() as u32
+            };
+            let (base, one, two) = (refine("phase:base"), refine("refine:1"), refine("refine:2"));
+            let worker = mission
+                .workers
+                .iter()
+                .find(|w| w.steps.contains(&base))
+                .unwrap();
+            let at = |step| worker.steps.iter().position(|&s| s == step).unwrap();
+            assert_eq!((at(one), at(two)), (at(base) + 1, at(base) + 2));
+        }
+        assert_eq!(candidates[0].prediction.chains["hot"].latency_ns, 3_200_000);
     }
 
     #[test]

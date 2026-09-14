@@ -1,6 +1,6 @@
 use crate::copperlists_reader;
 use cu29::clock::{CuDuration, OptionCuTime};
-use cu29::config::{CuConfig, CuGraph, DEFAULT_MISSION_ID, Flavor};
+use cu29::config::{CuConfig, CuGraph, DEFAULT_MISSION_ID};
 use cu29::curuntime::{CuExecutionUnit, CuStepPhase};
 use cu29::monitoring::CuDurationStatistics;
 use cu29::planner::{PlanEntityKind, assemble_runtime_plan_for_mission};
@@ -811,67 +811,8 @@ fn jitter_stats_from(stats: &CuDurationStatistics) -> DurationStats {
     }
 }
 
-/// A stable identity of one mission graph: its nodes, types and edges.
-pub(crate) fn graph_signature(graph: &CuGraph, mission: Option<&str>) -> String {
-    build_graph_signature(graph, mission)
-}
-
 fn build_graph_signature(graph: &CuGraph, mission: Option<&str>) -> String {
-    let mut parts = Vec::new();
-    parts.push(format!("mission={}", mission.unwrap_or("default")));
-
-    let mut nodes: Vec<_> = graph.get_all_nodes();
-    nodes.sort_by_key(|a| a.1.get_id());
-    for (_, node) in nodes {
-        parts.push(format!(
-            "node|{}|{}|{}",
-            node.get_id(),
-            node.get_type(),
-            flavor_label(node.get_flavor())
-        ));
-    }
-
-    let mut edges: Vec<String> = graph
-        .edges()
-        .map(|cnx| {
-            format!(
-                "edge|{}|{}|{}",
-                format_endpoint(cnx.src.as_str(), cnx.src_channel.as_deref()),
-                format_endpoint(cnx.dst.as_str(), cnx.dst_channel.as_deref()),
-                cnx.msg
-            )
-        })
-        .collect();
-    edges.sort();
-    parts.extend(edges);
-
-    let joined = parts.join("\n");
-    format!("fnv1a64:{:016x}", fnv1a64(joined.as_bytes()))
-}
-
-fn flavor_label(flavor: Flavor) -> &'static str {
-    match flavor {
-        Flavor::Task => "task",
-        Flavor::Bridge => "bridge",
-    }
-}
-
-fn format_endpoint(node: &str, channel: Option<&str>) -> String {
-    match channel {
-        Some(ch) => format!("{node}/{ch}"),
-        None => node.to_string(),
-    }
-}
-
-fn fnv1a64(data: &[u8]) -> u64 {
-    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
-    const PRIME: u64 = 0x100000001b3;
-    let mut hash = OFFSET_BASIS;
-    for byte in data {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(PRIME);
-    }
-    hash
+    cu29::planner::graph_signature(graph, mission)
 }
 
 #[cfg(test)]
