@@ -246,6 +246,52 @@ pub struct CuOperationProfile {
     pub skipped: CuCostStats,
     /// Fired invocations per second over the window.
     pub firing_rate_hz: f64,
+    /// Which CopperLists the operation fires in, when that repeats.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub firing: Option<CuFiringPattern>,
+}
+
+/// An operation firing in the CopperLists whose id modulo `period` is one
+/// of `phases`, as observed over at least two periods.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CuFiringPattern {
+    pub period: u32,
+    pub phases: Vec<u32>,
+}
+
+impl CuFiringPattern {
+    /// The smallest period under which `fired` (indexed by CopperList id
+    /// from `first_id`) repeats, checked over every pair of ids one period
+    /// apart; `None` below two periods of evidence or above `max_period`.
+    pub fn detect(first_id: u64, fired: &[bool], max_period: u32) -> Option<Self> {
+        (1..=max_period as usize)
+            .filter(|&period| fired.len() >= 2 * period)
+            .find(|&period| (period..fired.len()).all(|i| fired[i] == fired[i - period]))
+            .map(|period| Self {
+                period: period as u32,
+                phases: (0..period)
+                    .filter(|&i| fired[i])
+                    .map(|i| ((first_id + i as u64) % period as u64) as u32)
+                    .collect(),
+            })
+    }
+
+    /// The fraction of CopperLists with `id % modulus == offset` the
+    /// operation fires in.
+    pub fn probability(&self, modulus: u32, offset: u32) -> f64 {
+        let g = gcd(self.period, modulus);
+        let hits = self
+            .phases
+            .iter()
+            .filter(|&&phase| phase % g == offset % g)
+            .count() as f64;
+        hits / f64::from(self.period / g)
+    }
+}
+
+fn gcd(a: u32, b: u32) -> u32 {
+    if b == 0 { a } else { gcd(b, a % b) }
 }
 
 /// Summary of a set of durations, in nanoseconds; zeros when empty.
@@ -471,10 +517,27 @@ mod tests {
                 fired: stats,
                 skipped: CuCostStats::default(),
                 firing_rate_hz: 50.0,
+                firing: None,
             },
         );
         let text = profile.serialize_ron().unwrap();
         assert_eq!(CuProfile::deserialize_ron(&text).unwrap(), profile);
         assert!(CuProfile::deserialize_ron(&text.replace("version: 1", "version: 9")).is_err());
+    }
+
+    #[test]
+    fn a_firing_pattern_is_detected_and_projected_on_another_modulus() {
+        // Fires in CopperLists 3, 6, 9, ... observed from id 2.
+        let fired: Vec<bool> = (2u64..40).map(|id| id.is_multiple_of(3)).collect();
+        let pattern = CuFiringPattern::detect(2, &fired, 64).unwrap();
+        assert_eq!((pattern.period, pattern.phases.clone()), (3, vec![0]));
+        assert_eq!(pattern.probability(3, 0), 1.0);
+        assert_eq!(pattern.probability(3, 1), 0.0);
+        // Against a window of 4, every offset fires in a third of its CopperLists.
+        assert!((pattern.probability(4, 1) - 1.0 / 3.0).abs() < 1e-9);
+        // Below two periods of evidence there is no pattern.
+        assert!(CuFiringPattern::detect(0, &[true, false, false, true, false], 64).is_none());
+        let every = CuFiringPattern::detect(0, &[true; 8], 64).unwrap();
+        assert_eq!((every.period, every.phases), (1, vec![0]));
     }
 }

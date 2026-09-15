@@ -264,7 +264,7 @@ mod tests {
         let order: Vec<&str> = table.rows.iter().map(|r| r.candidate.as_str()).collect();
         assert_eq!(order, ["tight", "late", "dropping"]);
         assert_eq!(table.best().unwrap().score, vec![0.0, 0.0, 1.0, 0.9]);
-        assert_eq!(table.rows[2].score[0], 0.495);
+        assert_eq!(table.rows[2].score[0], 0.5);
         assert!(table.to_string().contains("tight score"));
         let text = table.serialize_ron().unwrap();
         assert!(text.contains("dropping"));

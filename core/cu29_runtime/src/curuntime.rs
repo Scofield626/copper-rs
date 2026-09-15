@@ -388,6 +388,13 @@ impl LoopRateLimiter {
         self.advance_from(clock.now());
     }
 
+    /// Moves the deadline one period on without skipping the periods already
+    /// missed, so a pipeline that fell behind catches up at its own pace.
+    #[inline]
+    pub fn advance_tick(&mut self) {
+        self.next_deadline += self.period;
+    }
+
     #[inline]
     pub fn limit(&mut self, clock: &RobotClock) {
         self.wait_until_ready(clock);

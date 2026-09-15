@@ -40,6 +40,7 @@ pub use pgo::CuChain;
 pub use pgo::CuChainProfile;
 pub use pgo::CuContract;
 pub use pgo::CuCostStats;
+pub use pgo::CuFiringPattern;
 pub use pgo::CuObjective;
 pub use pgo::CuObjectiveKind;
 pub use pgo::CuOperationProfile;

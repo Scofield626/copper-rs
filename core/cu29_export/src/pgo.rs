@@ -7,8 +7,8 @@ use cu29::config::{CuConfig, DEFAULT_MISSION_ID};
 use cu29::curuntime::{CuExecutionUnit, CuStepPhase, CuTaskType};
 use cu29::planner::graph_signature;
 use cu29::planner::{
-    CuChainProfile, CuContract, CuCostStats, CuOperationProfile, CuProfile, CuSourceProfile,
-    PlanEntityKind, assemble_runtime_plan_for_mission, step_key,
+    CuChainProfile, CuContract, CuCostStats, CuFiringPattern, CuOperationProfile, CuProfile,
+    CuSourceProfile, PlanEntityKind, assemble_runtime_plan_for_mission, step_key,
 };
 use cu29::prelude::{CopperListTuple, CuPayloadRawBytes, ErasedCuStampedData};
 use cu29::{CuError, CuResult};
@@ -20,7 +20,12 @@ use std::io::Read;
 struct OperationSamples {
     fired: Vec<u64>,
     skipped: Vec<u64>,
+    /// The ids of the CopperLists the operation fired in.
+    fired_ids: Vec<u64>,
 }
+
+/// The longest firing period detected, in CopperLists.
+const MAX_FIRING_PERIOD: u32 = 1024;
 
 /// A contract source's firings and the span from its first to its last.
 #[derive(Default)]
@@ -123,8 +128,12 @@ where
     let mut copperlists = 0u64;
     let mut window: Option<(u64, u64)> = None;
     let mut intervals: HashMap<&str, OriginInterval> = HashMap::new();
+    let mut ids: Option<(u64, u64)> = None;
 
     for culist in copperlists_reader::<P>(&mut reader) {
+        ids = Some(ids.map_or((culist.id, culist.id), |(first, last)| {
+            (first.min(culist.id), last.max(culist.id))
+        }));
         copperlists += 1;
         intervals.clear();
         for (msg, origin) in culist.msgs.cumsgs().iter().zip(origins.iter()) {
@@ -147,6 +156,7 @@ where
             let cost = interval.end_ns.saturating_sub(interval.start_ns);
             let entry = samples.entry(key.clone()).or_default();
             if interval.fired {
+                entry.fired_ids.push(culist.id);
                 entry.fired.push(cost);
             } else {
                 entry.skipped.push(cost);
@@ -200,12 +210,20 @@ where
         } else {
             0.0
         };
+        let firing = ids.and_then(|(first, last)| {
+            let mut fired = vec![false; (last - first + 1) as usize];
+            for id in &operation.fired_ids {
+                fired[(id - first) as usize] = true;
+            }
+            CuFiringPattern::detect(first, &fired, MAX_FIRING_PERIOD)
+        });
         profile.operations.insert(
             key,
             CuOperationProfile {
                 fired,
                 skipped: CuCostStats::from_samples(&mut operation.skipped),
                 firing_rate_hz,
+                firing,
             },
         );
     }

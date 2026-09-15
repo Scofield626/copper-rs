@@ -36,6 +36,8 @@ const KICK: usize = 3;
 const MIN_SEPARATION: f64 = 0.01;
 /// A delivered rate this close to nominal counts as kept.
 const RATE_TOLERANCE: f64 = 0.005;
+/// The resolution of the rate tier.
+const RATE_STEP: f64 = 0.02;
 
 /// What the proposer is asked to do.
 #[derive(Clone, Debug)]
@@ -121,6 +123,9 @@ struct Model {
     cpus: Vec<usize>,
     /// CopperLists in flight at once, at least one cycle's worth.
     max_in_flight: u32,
+    /// Expected cost of each unit in each cycle of the window, the longest
+    /// source period, from its firing pattern.
+    window_cost: Vec<Vec<u64>>,
     policy: SchedulingPolicy,
     deadline_objective: bool,
     margin: f64,
@@ -192,6 +197,7 @@ impl Model {
         }
         let mut cost = Vec::with_capacity(units.len());
         let mut fired_cost = Vec::with_capacity(units.len());
+        let mut firing = Vec::with_capacity(units.len());
         for unit in &units {
             let step = &inventory.steps[unit[0]];
             let task = task_of_key(&step.key);
@@ -200,6 +206,7 @@ impl Model {
                 // on its pool.
                 cost.push(0);
                 fired_cost.push(0);
+                firing.push(None);
                 continue;
             }
             let operation = profile.operations.get(&step.key).ok_or_else(|| {
@@ -214,7 +221,43 @@ impl Model {
                 operation.fired.mean_ns * fired + operation.skipped.mean_ns * (1.0 - fired);
             cost.push(expected as u64);
             fired_cost.push(operation.fired.mean_ns.max(operation.skipped.mean_ns) as u64);
+            firing.push(
+                operation
+                    .firing
+                    .clone()
+                    .map(|pattern| (pattern, operation.fired.mean_ns, operation.skipped.mean_ns)),
+            );
         }
+        // The window is the longest source period; a unit's cost in each of
+        // its CopperLists follows its firing pattern, or its average without.
+        let copperlists_per_cycle = inventory.copperlists_per_cycle;
+        let window_ns = contract
+            .sources
+            .iter()
+            .map(|source| u64::from(source.period_ms) * 1_000_000)
+            .max()
+            .unwrap_or(copperlist_ns)
+            .max(copperlist_ns);
+        let window_cycles = window_ns.div_ceil(copperlist_ns * u64::from(copperlists_per_cycle));
+        let window_cls = (window_cycles * u64::from(copperlists_per_cycle)) as u32;
+        let window_cost: Vec<Vec<u64>> = (0..window_cycles)
+            .map(|cycle| {
+                units
+                    .iter()
+                    .zip(&firing)
+                    .zip(&cost)
+                    .map(|((unit, firing), &average)| match firing {
+                        Some((pattern, fired_ns, skipped_ns)) => {
+                            let offset = cycle as u32 * copperlists_per_cycle
+                                + inventory.steps[unit[0]].copperlist;
+                            let p = pattern.probability(window_cls, offset);
+                            (fired_ns * p + skipped_ns * (1.0 - p)) as u64
+                        }
+                        None => average,
+                    })
+                    .collect()
+            })
+            .collect();
         let mut preds: Vec<Vec<usize>> = vec![Vec::new(); units.len()];
         for edge in &inventory.dependencies {
             let (from, to) = (unit_of[edge.from as usize], unit_of[edge.to as usize]);
@@ -266,7 +309,6 @@ impl Model {
             .iter()
             .map(|source| units_of(&source.task))
             .collect();
-        let copperlists_per_cycle = inventory.copperlists_per_cycle;
         Ok(Self {
             cycle_ns: copperlist_ns * u64::from(copperlists_per_cycle),
             inventory,
@@ -284,6 +326,7 @@ impl Model {
             sources,
             cpus: contract.cpus.clone(),
             max_in_flight: contract.max_in_flight.max(copperlists_per_cycle),
+            window_cost,
             policy: contract.worker_policy,
             deadline_objective: contract.objective.kind == CuObjectiveKind::Deadline,
             margin: contract.objective.margin,
@@ -351,6 +394,16 @@ impl Model {
         // latency is paid in the cycles it runs, not on average.
         let (starts, ends) = self.timeline(lanes, &self.fired_cost)?;
         let (_, expected_ends) = self.timeline(lanes, &self.cost)?;
+        // A lane runs its cycles in order and is occupied until its last
+        // step of a cycle ends, waits included; over the window each cycle is
+        // released on the grid. A lane still busy past the window's end
+        // delivers that fraction of it.
+        let window_ns = period * self.window_cost.len() as u64;
+        for (l, last_end) in self.window_timeline(lanes).into_iter().enumerate() {
+            if last_end > window_ns {
+                rate[l] = rate[l].min(window_ns as f64 / last_end as f64);
+            }
+        }
         let mut chain_ratio = Vec::with_capacity(self.chains.len());
         for (chain, pairs) in self.chains.iter().enumerate() {
             let deadline = u64::from(self.contract_deadline(chain)) * 1_000_000;
@@ -439,6 +492,42 @@ impl Model {
         (remaining == 0).then_some((starts, ends))
     }
 
+    /// Each lane's last end over the window: cycles released on the grid,
+    /// lanes in order across cycles, a unit waiting for its zero-lag
+    /// predecessors of the same cycle.
+    fn window_timeline(&self, lanes: &[Vec<usize>]) -> Vec<u64> {
+        let n = self.units.len();
+        let cycles = self.window_cost.len();
+        let mut ends = vec![0u64; n * cycles];
+        let mut done = vec![false; n * cycles];
+        let mut lane_free = vec![0u64; lanes.len()];
+        let mut position = vec![0usize; lanes.len()];
+        let mut progressed = true;
+        while progressed {
+            progressed = false;
+            for (l, lane) in lanes.iter().enumerate() {
+                while position[l] < lane.len() * cycles {
+                    let (cycle, o) = (position[l] / lane.len(), lane[position[l] % lane.len()]);
+                    let at = |unit: usize| cycle * n + unit;
+                    if self.preds[o].iter().any(|&p| !done[at(p)]) {
+                        break;
+                    }
+                    let release = self.preds[o]
+                        .iter()
+                        .map(|&p| ends[at(p)])
+                        .fold(cycle as u64 * self.cycle_ns, u64::max);
+                    let start = lane_free[l].max(release);
+                    ends[at(o)] = start + self.window_cost[cycle][o];
+                    lane_free[l] = ends[at(o)];
+                    done[at(o)] = true;
+                    position[l] += 1;
+                    progressed = true;
+                }
+            }
+        }
+        lane_free
+    }
+
     fn contract_deadline(&self, chain: usize) -> u32 {
         self.chain_deadlines[chain]
     }
@@ -507,9 +596,12 @@ fn first_unit_on_a_cycle(preds: &[Vec<usize>]) -> Option<usize> {
     (0..preds.len()).find(|&i| left[i])
 }
 
-/// A source within `RATE_TOLERANCE` of its period keeps its rate.
+/// A source within `RATE_TOLERANCE` of its period keeps its rate; a deficit
+/// counts in steps of `RATE_STEP`, so the tiers below decide between plans
+/// whose rates the model cannot tell apart.
 pub(super) fn rate_deficit(rate: f64) -> f64 {
-    (1.0 - RATE_TOLERANCE - rate).max(0.0)
+    let deficit = (1.0 - RATE_TOLERANCE - rate).max(0.0);
+    (deficit / RATE_STEP).ceil() * RATE_STEP
 }
 
 /// A deterministic pseudo-random sequence for the search (splitmix64).
@@ -921,6 +1013,7 @@ mod tests {
                     fired: CuCostStats::from_samples(&mut samples),
                     skipped: CuCostStats::default(),
                     firing_rate_hz: 100.0,
+                    firing: None,
                 },
             );
         }
@@ -1037,6 +1130,7 @@ mod tests {
                     fired: CuCostStats::from_samples(&mut samples),
                     skipped: CuCostStats::default(),
                     firing_rate_hz: 100.0,
+                    firing: None,
                 },
             );
         }

@@ -138,6 +138,8 @@ fn profile_reports_operations_chains_and_source_rates() {
     assert!(work.fired.min_ns <= work.fired.p50_ns && work.fired.p50_ns <= work.fired.max_ns);
     assert!(work.fired.p99_ns > work.skipped.p99_ns, "{work:?}");
     assert!(work.firing_rate_hz > 0.0);
+    let firing = work.firing.as_ref().unwrap();
+    assert_eq!((firing.period, firing.phases.len()), (2, 1));
     let src = &profile.operations["mission:default|task:src|phase:whole"];
     assert_eq!(src.fired.samples, ITERATIONS / 2);
     let sink = &profile.operations["mission:default|task:sink|phase:whole"];

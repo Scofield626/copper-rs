@@ -5239,7 +5239,7 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                                 next_launch_clid += 1;
                                 in_flight += 1;
                                 if let Some(limiter) = dispatch_limiter.as_mut() {
-                                    limiter.mark_tick(clock);
+                                    limiter.advance_tick();
                                 }
                                 continue;
                             }
