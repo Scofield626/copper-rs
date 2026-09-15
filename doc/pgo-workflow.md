@@ -319,12 +319,15 @@ later worker back to an earlier one, because two workers waiting on each other i
 CopperList finish every CopperList together and never run ahead, whatever `max_in_flight`
 allows. Measured on the Autoware replica at four cores, such plans kept two CopperLists in
 flight of forty and idled 36–45% of every lane. Under a real-time `worker_policy` each CPU
-gets two workers, the base one and one a priority above it, so short chains preempt long
-stages; a plan's rate is then each lane's work over the window plus that of the
-higher-priority lanes on its CPU, and a chain segment on a lower lane is stretched by the
-share those lanes take. The start is one stage per CPU cut by load from the earliest-start
-order, connected components kept contiguous and those with a deadline under the window
-placed whole on the higher worker. The search unit is one occurrence, or an anytime base
+gets two workers, the base one and one a priority above it; the higher one may only hold
+units on chains due within their source's period, which is what it preempts for. A chain
+segment on a base worker is stretched by the share its CPU's higher worker takes. Rates
+and chain latencies come from a two-window timeline of the lanes in steady state, cycles
+released on the grid and held by the ring: a lane's rate is the window over its cycle
+time in the second window, waits included, and a chain across lanes pays the cycles one
+lane runs behind the other. The start is connected components in deadline order, each in
+earliest-start order, cut into one stage per CPU by load; a component of short-deadline
+work that fits a CPU's share goes whole to that CPU's higher worker. The search unit is one occurrence, or an anytime base
 occurrence with its refinements, which the executor runs together on one worker. The
 profile must carry the config's graph signature. Moves: move an occurrence to another worker and position;
 swap two neighbours on a worker. A move that closes a cycle with the required edges, or
