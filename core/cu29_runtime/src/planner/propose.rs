@@ -164,8 +164,8 @@ struct Assignment {
 
 struct Evaluation {
     score: Vec<f64>,
-    ends: Vec<u64>,
-    starts: Vec<u64>,
+    /// Per chain, the latency the score used.
+    chain_latency: Vec<u64>,
     response: Vec<Option<u64>>,
     rate: Vec<f64>,
     load: Vec<f64>,
@@ -302,7 +302,7 @@ impl Model {
         let fires: Vec<Vec<bool>> = (0..window_cycles)
             .map(|cycle| {
                 (0..units.len())
-                    .map(|unit| probability(cycle, unit).is_none_or(|p| p > 0.5))
+                    .map(|unit| probability(cycle, unit).is_none_or(|p| p > 0.0))
                     .collect()
             })
             .collect();
@@ -580,6 +580,7 @@ impl Model {
             }
         }
         let mut chain_ratio = Vec::with_capacity(self.chains.len());
+        let mut chain_latency = Vec::with_capacity(self.chains.len());
         for (chain, pairs) in self.chains.iter().enumerate() {
             let deadline = u64::from(self.contract_deadline(chain)) * 1_000_000;
             let latency = pairs
@@ -598,6 +599,7 @@ impl Model {
                 .max()
                 .unwrap_or(0);
             chain_ratio.push(latency as f64 / deadline as f64);
+            chain_latency.push(latency);
         }
         // Admission is gated by the whole cycle: the slowest lane throttles
         // every source, wherever the source itself runs, and so does the
@@ -665,8 +667,7 @@ impl Model {
         };
         Some(Evaluation {
             score,
-            ends,
-            starts,
+            chain_latency,
             response,
             rate,
             load,
@@ -1182,15 +1183,9 @@ impl Model {
             .iter()
             .zip(&self.chains)
             .enumerate()
-            .map(|(index, (chain, pairs))| {
+            .map(|(index, (chain, _))| {
                 let deadline_ns = u64::from(chain.deadline_ms) * 1_000_000;
-                let latency_ns = pairs
-                    .iter()
-                    .map(|&(source, sink)| {
-                        evaluation.ends[sink].saturating_sub(evaluation.starts[source])
-                    })
-                    .max()
-                    .unwrap_or(0);
+                let latency_ns = evaluation.chain_latency[index];
                 (
                     chain.id.clone(),
                     CuChainPrediction {
