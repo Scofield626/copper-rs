@@ -81,6 +81,9 @@ pub struct CuChainPrediction {
     pub deadline_ns: u64,
     /// `latency / deadline`.
     pub ratio: f64,
+    /// The predicted miss rate band, under the miss-rate objective.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub miss_rate: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -109,6 +112,9 @@ struct Model {
     cost: Vec<u64>,
     /// Cost of each unit in a cycle where it fires, in nanoseconds.
     fired_cost: Vec<u64>,
+    /// The p95, p99 and worst fired cost of each unit, for the miss-rate
+    /// objective's tails.
+    tail_cost: [Vec<u64>; 3],
     /// Zero-lag predecessor units of each unit.
     preds: Vec<Vec<usize>>,
     /// CopperList period, the dispatch granularity `g`.
@@ -127,9 +133,12 @@ struct Model {
     /// source period, from its firing pattern.
     window_cost: Vec<Vec<u64>>,
     policy: SchedulingPolicy,
-    deadline_objective: bool,
+    objective: CuObjectiveKind,
     margin: f64,
 }
+
+/// The miss rate a chain over its deadline at each cost tail stands for.
+const TAIL_MISS_RATE: [f64; 3] = [0.05, 0.01, 0.001];
 
 /// A candidate under search: each worker is one CPU with an ordered list of
 /// occurrences.
@@ -146,6 +155,8 @@ struct Evaluation {
     rate: Vec<f64>,
     load: Vec<f64>,
     cycle_rate: f64,
+    /// Per chain, under the miss-rate objective.
+    miss_rate: Vec<f64>,
 }
 
 impl Model {
@@ -197,6 +208,7 @@ impl Model {
         }
         let mut cost = Vec::with_capacity(units.len());
         let mut fired_cost = Vec::with_capacity(units.len());
+        let mut tail_cost: [Vec<u64>; 3] = Default::default();
         let mut firing = Vec::with_capacity(units.len());
         for unit in &units {
             let step = &inventory.steps[unit[0]];
@@ -206,6 +218,7 @@ impl Model {
                 // on its pool.
                 cost.push(0);
                 fired_cost.push(0);
+                tail_cost.iter_mut().for_each(|tail| tail.push(0));
                 firing.push(None);
                 continue;
             }
@@ -221,6 +234,18 @@ impl Model {
                 operation.fired.mean_ns * fired + operation.skipped.mean_ns * (1.0 - fired);
             cost.push(expected as u64);
             fired_cost.push(operation.fired.mean_ns.max(operation.skipped.mean_ns) as u64);
+            let stats = if operation.fired.samples > 0 {
+                &operation.fired
+            } else {
+                &operation.skipped
+            };
+            for (tail, value) in
+                tail_cost
+                    .iter_mut()
+                    .zip([stats.p95_ns, stats.p99_ns, stats.max_ns])
+            {
+                tail.push(value);
+            }
             firing.push(
                 operation
                     .firing
@@ -315,6 +340,7 @@ impl Model {
             units,
             cost,
             fired_cost,
+            tail_cost,
             preds,
             copperlist_ns,
             chains,
@@ -328,7 +354,7 @@ impl Model {
             max_in_flight: contract.max_in_flight.max(copperlists_per_cycle),
             window_cost,
             policy: contract.worker_policy,
-            deadline_objective: contract.objective.kind == CuObjectiveKind::Deadline,
+            objective: contract.objective.kind,
             margin: contract.objective.margin,
         })
     }
@@ -435,8 +461,9 @@ impl Model {
         let rate_deficit: f64 = source_rate.iter().map(|&r| rate_deficit(r)).sum();
         let sum: f64 = chain_ratio.iter().sum();
         let max_load = load.iter().copied().fold(0.0f64, f64::max);
-        let score = if self.deadline_objective {
-            vec![
+        let mut miss_rate = Vec::new();
+        let score = match self.objective {
+            CuObjectiveKind::Deadline => vec![
                 round6(rate_deficit),
                 chain_ratio.iter().filter(|&&r| r > 1.0).count() as f64,
                 chain_ratio
@@ -445,9 +472,37 @@ impl Model {
                     .count() as f64,
                 round6(sum),
                 round6(max_load),
-            ]
-        } else {
-            vec![round6(rate_deficit), round6(sum), round6(max_load)]
+            ],
+            CuObjectiveKind::Sum => vec![round6(rate_deficit), round6(sum), round6(max_load)],
+            CuObjectiveKind::MissRate => {
+                // A chain over its deadline with mean costs misses half the
+                // time; over it only with tail costs, that tail's share.
+                miss_rate = chain_ratio
+                    .iter()
+                    .map(|&r| if r > 1.0 { 0.5 } else { 0.0 })
+                    .collect();
+                for (tail, &share) in self.tail_cost.iter().zip(&TAIL_MISS_RATE) {
+                    let (tail_starts, tail_ends) = self.timeline(lanes, tail)?;
+                    for (chain, pairs) in self.chains.iter().enumerate() {
+                        let deadline = u64::from(self.contract_deadline(chain)) * 1_000_000;
+                        let late = pairs.iter().any(|&(source, sink)| {
+                            tail_ends[sink].saturating_sub(tail_starts[source]) > deadline
+                        });
+                        if late && miss_rate[chain] == 0.0 {
+                            miss_rate[chain] = share;
+                        }
+                    }
+                }
+                let worst = miss_rate.iter().copied().fold(0.0f64, f64::max);
+                let mean = miss_rate.iter().sum::<f64>() / miss_rate.len().max(1) as f64;
+                vec![
+                    round6(rate_deficit),
+                    round6(worst),
+                    round6(mean),
+                    round6(sum),
+                    round6(max_load),
+                ]
+            }
         };
         Some(Evaluation {
             score,
@@ -457,6 +512,7 @@ impl Model {
             rate,
             load,
             cycle_rate,
+            miss_rate,
         })
     }
 
@@ -811,7 +867,8 @@ impl Model {
             .chains
             .iter()
             .zip(&self.chains)
-            .map(|(chain, pairs)| {
+            .enumerate()
+            .map(|(index, (chain, pairs))| {
                 let deadline_ns = u64::from(chain.deadline_ms) * 1_000_000;
                 let latency_ns = pairs
                     .iter()
@@ -826,6 +883,7 @@ impl Model {
                         latency_ns,
                         deadline_ns,
                         ratio: latency_ns as f64 / deadline_ns as f64,
+                        miss_rate: evaluation.miss_rate.get(index).copied(),
                     },
                 )
             })
@@ -908,7 +966,11 @@ pub fn propose(request: &ProposeRequest<'_>) -> CuResult<Vec<CuCandidate>> {
         .clone();
     let model = Model::new(request, inventory)?;
     let scored = model.search(request.seed, request.moves, request.restarts);
-    let sum_tier = if model.deadline_objective { 3 } else { 1 };
+    let sum_tier = if model.objective == CuObjectiveKind::Sum {
+        1
+    } else {
+        3
+    };
     let mut chosen: Vec<(Vec<f64>, Assignment)> = Vec::new();
     for (score, assignment) in scored {
         if chosen.len() >= request.candidates {

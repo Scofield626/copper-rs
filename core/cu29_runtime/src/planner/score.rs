@@ -126,6 +126,18 @@ impl CuScoreTable {
                     round6(sum),
                 ],
                 CuObjectiveKind::Sum => vec![round6(rate_deficit), round6(sum)],
+                CuObjectiveKind::MissRate => {
+                    let rates: Vec<f64> = chains
+                        .values()
+                        .map(|c| c.misses as f64 / c.samples.max(1) as f64)
+                        .collect();
+                    vec![
+                        round6(rate_deficit),
+                        round6(rates.iter().copied().fold(0.0f64, f64::max)),
+                        round6(rates.iter().sum::<f64>() / rates.len().max(1) as f64),
+                        round6(sum),
+                    ]
+                }
             };
             rows.push(CuScoreRow {
                 candidate: candidate.clone(),

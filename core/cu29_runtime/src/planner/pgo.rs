@@ -103,6 +103,11 @@ pub enum CuObjectiveKind {
     Deadline,
     /// The sum of latency over deadline, then the largest worker load.
     Sum,
+    /// The highest deadline-miss rate over the chains, then their mean, then
+    /// the sum of latency over deadline. Predicted from the profile's cost
+    /// tails: a chain over its deadline with mean costs counts 50%, with p95
+    /// costs 5%, with p99 costs 1%, with worst costs 0.1%.
+    MissRate,
 }
 
 /// A background pool a candidate may place compute on.
