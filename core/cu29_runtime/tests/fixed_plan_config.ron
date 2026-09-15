@@ -1,0 +1,75 @@
+(
+    tasks: [
+        (id: "left", type: "Source"),
+        (id: "right", type: "Source"),
+        (id: "join", type: "Join"),
+        (id: "sink", type: "Sink"),
+    ],
+    cnx: [
+        (
+            src: "left",
+            dst: "join",
+            msg: "u32",
+        ),
+        (
+            src: "right",
+            dst: "join",
+            msg: "u32",
+        ),
+        (
+            src: "join",
+            dst: "sink",
+            msg: "u32",
+        ),
+    ],
+    runtime: (
+        planner: (
+            type: "cu29::planner::Fixed",
+            config: {
+                "plan": {
+                    "version": 2,
+                    "missions": {
+                        "default": {
+                            "copperlists_per_cycle": 1,
+                            "max_in_flight": 1,
+                            "steps": [
+                                {
+                                    "key": "mission:default|task:left|phase:whole",
+                                    "copperlist": 0,
+                                },
+                                {
+                                    "key": "mission:default|task:right|phase:whole",
+                                    "copperlist": 0,
+                                },
+                                {
+                                    "key": "mission:default|task:join|phase:whole",
+                                    "copperlist": 0,
+                                },
+                                {
+                                    "key": "mission:default|task:sink|phase:whole",
+                                    "copperlist": 0,
+                                },
+                            ],
+                            "workers": [
+                                {
+                                    "id": "main",
+                                    "placement": {
+                                        "kind": "main",
+                                    },
+                                    "steps": [
+                                        1,
+                                        0,
+                                        2,
+                                        3,
+                                    ],
+                                },
+                            ],
+                            "dependencies": [],
+                        },
+                    },
+                },
+            },
+        ),
+    ),
+    logging: (slab_size_mib: 16),
+)

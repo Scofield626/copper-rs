@@ -60,6 +60,8 @@ pub cu29_export::logstats::StageLogStats::origin: alloc::string::String
 pub cu29_export::logstats::StageLogStats::samples: u64
 pub fn cu29_export::logstats::compute_logstats<P>(reader: impl std::io::Read, config: &cu29_runtime::config::CuConfig, mission: core::option::Option<&str>) -> cu29_traits::CuResult<cu29_export::logstats::LogStats> where P: cu29_traits::CopperListTuple + cu29_traits::CuPayloadRawBytes
 pub fn cu29_export::logstats::write_logstats(stats: &cu29_export::logstats::LogStats, path: &std::path::Path) -> cu29_traits::CuResult<()>
+pub mod cu29_export::pgo
+pub fn cu29_export::pgo::compute_profile<P>(reader: impl std::io::Read, config: &cu29_runtime::config::CuConfig, mission: core::option::Option<&str>, contract: &cu29_runtime::planner::pgo::CuContract) -> cu29_traits::CuResult<cu29_runtime::planner::pgo::CuProfile> where P: cu29_traits::CopperListTuple + cu29_traits::CuPayloadRawBytes
 pub enum cu29_export::Command
 pub cu29_export::Command::ExtractCopperlists
 pub cu29_export::Command::ExtractCopperlists::export_format: cu29_export::ExportFormat
@@ -74,6 +76,12 @@ pub cu29_export::Command::LogStats::config: core::option::Option<std::path::Path
 pub cu29_export::Command::LogStats::features: alloc::vec::Vec<alloc::string::String>
 pub cu29_export::Command::LogStats::mission: core::option::Option<alloc::string::String>
 pub cu29_export::Command::LogStats::output: std::path::PathBuf
+pub cu29_export::Command::PgoProfile
+pub cu29_export::Command::PgoProfile::config: core::option::Option<std::path::PathBuf>
+pub cu29_export::Command::PgoProfile::contract: std::path::PathBuf
+pub cu29_export::Command::PgoProfile::features: alloc::vec::Vec<alloc::string::String>
+pub cu29_export::Command::PgoProfile::mission: core::option::Option<alloc::string::String>
+pub cu29_export::Command::PgoProfile::output: std::path::PathBuf
 pub enum cu29_export::ExportFormat
 pub cu29_export::ExportFormat::Csv
 pub cu29_export::ExportFormat::Json

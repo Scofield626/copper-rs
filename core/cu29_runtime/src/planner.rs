@@ -6,6 +6,9 @@
 //! runtime generates. Planners run at build time, never on the robot: the
 //! ship-with-copper ones execute inside `#[copper_runtime]`, out-of-tree ones
 //! in the application's `build.rs` via [`emit_plan`].
+//!
+//! [`CuPlan`] exports the resulting concrete process steps. [`Fixed`] consumes
+//! that saved sequence through `runtime.planner` without choosing a new order.
 
 use crate::config::{
     BridgeChannelConfigRepresentation, ComponentConfig, ConfigGraphs, CuConfig, CuDirection,
@@ -23,6 +26,55 @@ use alloc::vec;
 use alloc::vec::Vec;
 use cu29_traits::{CuError, CuResult};
 use serde::{Deserialize, Serialize};
+
+mod fixed;
+pub use fixed::CuPlan;
+pub use fixed::Fixed;
+mod pgo;
+#[cfg(feature = "std")]
+mod propose;
+#[cfg(feature = "std")]
+mod score;
+pub use pgo::CuBackgroundPool;
+pub use pgo::CuChain;
+pub use pgo::CuChainProfile;
+pub use pgo::CuContract;
+pub use pgo::CuCostStats;
+pub use pgo::CuFiringPattern;
+pub use pgo::CuObjective;
+pub use pgo::CuObjectiveKind;
+pub use pgo::CuOperationProfile;
+pub use pgo::CuProfile;
+pub use pgo::CuSourceProfile;
+pub use pgo::CuSourceRate;
+pub use pgo::graph_signature;
+#[cfg(feature = "std")]
+pub use propose::CuCandidate;
+#[cfg(feature = "std")]
+pub use propose::CuChainPrediction;
+#[cfg(feature = "std")]
+pub use propose::CuPrediction;
+#[cfg(feature = "std")]
+pub use propose::CuWorkerPrediction;
+#[cfg(feature = "std")]
+pub use propose::ProposeRequest;
+#[cfg(feature = "std")]
+pub use propose::propose;
+#[cfg(feature = "std")]
+pub use score::CuChainScore;
+#[cfg(feature = "std")]
+pub use score::CuScoreRow;
+#[cfg(feature = "std")]
+pub use score::CuScoreTable;
+mod schedule;
+pub use schedule::CuMissionPlan;
+pub use schedule::CuPlanBackground;
+pub use schedule::CuPlanBackgroundResult;
+pub use schedule::CuPlanDependency;
+pub use schedule::CuPlanPlacement;
+pub use schedule::CuPlanStep;
+pub use schedule::CuPlanThread;
+pub use schedule::CuPlanWorker;
 
 /// Default number of preallocated CopperLists compiled into a runtime.
 ///
@@ -66,6 +118,42 @@ pub struct AssembledPlan {
     pub entities: Vec<PlanEntity>,
     /// Indexed by the plan `NodeId`; bridge stages contain `None`.
     pub plan_to_original: Vec<Option<NodeId>>,
+    /// How each background task publishes its result; empty means every one
+    /// samples its newest result (the behaviour without a fixed plan).
+    pub background: Vec<CuPlanBackground>,
+    /// The multicore schedule to generate, when the plan is not serial.
+    pub lanes: Option<LanePlan>,
+}
+
+/// A multicore plan resolved against `AssembledPlan::execution`: every
+/// occurrence names a step index, and workers list occurrence indices.
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LanePlan {
+    pub copperlists_per_cycle: u32,
+    pub max_in_flight: u32,
+    pub occurrences: Vec<LaneOccurrence>,
+    pub workers: Vec<LaneWorker>,
+    pub dispatcher: Option<CuPlanThread>,
+    pub dependencies: Vec<CuPlanDependency>,
+}
+
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LaneOccurrence {
+    /// Index into `AssembledPlan::execution.steps`.
+    pub step: usize,
+    /// CopperList offset within the cycle.
+    pub copperlist: u32,
+}
+
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LaneWorker {
+    pub id: String,
+    pub placement: CuPlanPlacement,
+    /// Occurrence indices in execution order.
+    pub occurrences: Vec<usize>,
 }
 
 /// The only decision a planner makes: a total step order over plan `NodeId`s.
@@ -100,6 +188,7 @@ const LINEARITY_PLANNER: &str = "cu29::planner::Linearity";
 
 /// Canonical config `type` for [`Pinned`].
 const PINNED_PLANNER: &str = "cu29::planner::Pinned";
+const FIXED_PLANNER: &str = "cu29::planner::Fixed";
 
 /// The default planner: best-effort linearity, keeping each source-to-sink
 /// chain contiguous. Needs no measurements and is bit-identical to the
@@ -155,7 +244,7 @@ fn instantiate_builtin_planner(
 
 /// The canonical config `type` strings of the planners shipped with copper.
 #[doc(hidden)]
-pub const BUILTIN_PLANNERS: [&str; 2] = [LINEARITY_PLANNER, PINNED_PLANNER];
+pub const BUILTIN_PLANNERS: [&str; 3] = [LINEARITY_PLANNER, PINNED_PLANNER, FIXED_PLANNER];
 
 /// Whether `type_path` names a planner shipped with copper.
 #[doc(hidden)]
@@ -647,6 +736,7 @@ fn inferred_output_name(node: &Node, task_type: CuTaskType) -> String {
     }
     let task_trait = match task_type {
         CuTaskType::Source => "cu29::cutask::CuSrcTask",
+        CuTaskType::Regular if node.is_stateless_task() => "cu29::cutask::CuStatelessTask",
         CuTaskType::Regular => "cu29::cutask::CuTask",
         CuTaskType::Sink => unreachable!("sinks do not have inferred outputs"),
     };
@@ -840,19 +930,24 @@ fn assemble_from_order(plan_graph: PlanGraph, order: StepOrder) -> CuResult<Asse
         execution,
         entities: plan_graph.entities,
         plan_to_original: plan_graph.plan_to_original,
+        background: Vec::new(),
+        lanes: None,
     })
 }
 
-/// Assemble the generated execution plan, ordering it with the planner the
-/// config selects (`runtime.planner`, defaulting to [`Linearity`]).
+/// Assemble a graph-node heuristic plan (`Linearity` or `Pinned`).
 ///
-/// Only ship-with-copper planners can be instantiated here; a config naming an
-/// out-of-tree planner must carry its build-time resolved order — see
-/// [`assemble_runtime_plan_from_step_keys`] and [`emit_plan`].
+/// Use [`assemble_runtime_plan_for_mission`] to consume the effective mission
+/// schedule, including fixed plans and baked out-of-tree planner orders.
 #[doc(hidden)]
 pub fn assemble_runtime_plan(config: &CuConfig, graph: &CuGraph) -> CuResult<AssembledPlan> {
     let planner: Box<dyn CuPlanner> = match config.planner_config() {
         None => Box::new(Linearity),
+        Some(selection) if selection.get_type() == FIXED_PLANNER => {
+            return Err(CuError::from(
+                "Fixed needs a mission identity; use assemble_runtime_plan_for_mission",
+            ));
+        }
         Some(selection) => instantiate_builtin_planner(selection.get_type(), selection.get_config())?
             .ok_or_else(|| {
                 CuError::from(format!(
@@ -864,6 +959,43 @@ pub fn assemble_runtime_plan(config: &CuConfig, graph: &CuGraph) -> CuResult<Ass
             })?,
     };
     assemble_runtime_plan_with_planner(config, graph, planner.as_ref())
+}
+
+/// Assemble the effective plan for a mission, including fixed process steps
+/// or an out-of-tree planner's baked node order.
+#[doc(hidden)]
+pub fn assemble_runtime_plan_for_mission(
+    config: &CuConfig,
+    graph: &CuGraph,
+    mission: &str,
+) -> CuResult<AssembledPlan> {
+    if let Some(plan) = configured_fixed_plan(config)? {
+        return Fixed::new(plan)?.assemble(config, graph, mission);
+    }
+    match config.planner_resolved_order(mission) {
+        Some(keys) => assemble_runtime_plan_from_step_keys(config, graph, keys),
+        None => assemble_runtime_plan(config, graph),
+    }
+}
+
+fn configured_fixed_plan(config: &CuConfig) -> CuResult<Option<CuPlan>> {
+    if let Some(selection) = config.planner_config()
+        && selection.get_type() == FIXED_PLANNER
+    {
+        if selection.resolved_orders().is_some() {
+            return Err(CuError::from(
+                "Fixed plans cannot also specify resolved node orders",
+            ));
+        }
+        let plan = selection
+            .get_config()
+            .ok_or_else(|| CuError::from("Fixed needs config: { \"plan\": { ... } }"))?
+            .get_value::<CuPlan>("plan")
+            .map_err(|e| CuError::from(format!("Fixed plan: {e}")))?
+            .ok_or_else(|| CuError::from("Fixed needs config: { \"plan\": { ... } }"))?;
+        return Ok(Some(plan));
+    }
+    Ok(None)
 }
 
 /// Assemble with an explicit planner instance, bypassing the config selection.

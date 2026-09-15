@@ -1,9 +1,9 @@
 use crate::copperlists_reader;
 use cu29::clock::{CuDuration, OptionCuTime};
-use cu29::config::{CuConfig, CuGraph, DEFAULT_MISSION_ID, Flavor};
+use cu29::config::{CuConfig, CuGraph, DEFAULT_MISSION_ID};
 use cu29::curuntime::{CuExecutionUnit, CuStepPhase};
 use cu29::monitoring::CuDurationStatistics;
-use cu29::planner::{PlanEntityKind, assemble_runtime_plan, assemble_runtime_plan_from_step_keys};
+use cu29::planner::{PlanEntityKind, assemble_runtime_plan_for_mission};
 use cu29::prelude::{CopperListTuple, CuMsgMetadataTrait, CuPayloadRawBytes};
 use cu29::{CuError, CuResult};
 use serde::{Deserialize, Serialize};
@@ -651,8 +651,7 @@ fn build_output_slots<P: CopperListTuple>(
 ) -> CuResult<Vec<OutputSlot>> {
     let specs = P::get_output_specs();
     if specs.is_empty() {
-        let resolved = config.planner_resolved_order(mission.unwrap_or(DEFAULT_MISSION_ID));
-        return build_output_slots_from_plan(config, graph, resolved);
+        return build_output_slots_from_plan(config, graph, mission.unwrap_or(DEFAULT_MISSION_ID));
     }
     Ok(specs
         .iter()
@@ -697,14 +696,11 @@ fn edge_key_from_connection(cnx: &cu29::config::Cnx) -> EdgeKey {
 fn build_output_slots_from_plan(
     config: &CuConfig,
     graph: &CuGraph,
-    resolved: Option<&[String]>,
+    mission: &str,
 ) -> CuResult<Vec<OutputSlot>> {
     // Share the generated-runtime construction path (bridge stages, slot
     // indices) so this cannot drift from the compiled plan.
-    let plan = match resolved {
-        Some(step_keys) => assemble_runtime_plan_from_step_keys(config, graph, step_keys)?,
-        None => assemble_runtime_plan(config, graph)?,
-    };
+    let plan = assemble_runtime_plan_for_mission(config, graph, mission)?;
 
     let mut packs: Vec<(u32, String, Vec<String>)> = Vec::new();
     for unit in &plan.execution.steps {
@@ -816,61 +812,7 @@ fn jitter_stats_from(stats: &CuDurationStatistics) -> DurationStats {
 }
 
 fn build_graph_signature(graph: &CuGraph, mission: Option<&str>) -> String {
-    let mut parts = Vec::new();
-    parts.push(format!("mission={}", mission.unwrap_or("default")));
-
-    let mut nodes: Vec<_> = graph.get_all_nodes();
-    nodes.sort_by_key(|a| a.1.get_id());
-    for (_, node) in nodes {
-        parts.push(format!(
-            "node|{}|{}|{}",
-            node.get_id(),
-            node.get_type(),
-            flavor_label(node.get_flavor())
-        ));
-    }
-
-    let mut edges: Vec<String> = graph
-        .edges()
-        .map(|cnx| {
-            format!(
-                "edge|{}|{}|{}",
-                format_endpoint(cnx.src.as_str(), cnx.src_channel.as_deref()),
-                format_endpoint(cnx.dst.as_str(), cnx.dst_channel.as_deref()),
-                cnx.msg
-            )
-        })
-        .collect();
-    edges.sort();
-    parts.extend(edges);
-
-    let joined = parts.join("\n");
-    format!("fnv1a64:{:016x}", fnv1a64(joined.as_bytes()))
-}
-
-fn flavor_label(flavor: Flavor) -> &'static str {
-    match flavor {
-        Flavor::Task => "task",
-        Flavor::Bridge => "bridge",
-    }
-}
-
-fn format_endpoint(node: &str, channel: Option<&str>) -> String {
-    match channel {
-        Some(ch) => format!("{node}/{ch}"),
-        None => node.to_string(),
-    }
-}
-
-fn fnv1a64(data: &[u8]) -> u64 {
-    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
-    const PRIME: u64 = 0x100000001b3;
-    let mut hash = OFFSET_BASIS;
-    for byte in data {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(PRIME);
-    }
-    hash
+    cu29::planner::graph_signature(graph, mission)
 }
 
 #[cfg(test)]
@@ -897,7 +839,7 @@ mod tests {
         .expect("valid anytime config");
         let graph = config.get_graph(None).unwrap();
 
-        let plan = assemble_runtime_plan(&config, graph).unwrap();
+        let plan = assemble_runtime_plan_for_mission(&config, graph, DEFAULT_MISSION_ID).unwrap();
         // The regression can only trigger if refine steps are actually present.
         assert!(
             plan.execution.steps.iter().any(|unit| matches!(
@@ -924,7 +866,7 @@ mod tests {
         deduped.dedup();
         assert_eq!(deduped.len(), expected_indices.len(), "culist indices dup");
 
-        let slots = build_output_slots_from_plan(&config, graph, None).unwrap();
+        let slots = build_output_slots_from_plan(&config, graph, DEFAULT_MISSION_ID).unwrap();
         assert_eq!(slots.len(), expected_slots);
     }
 

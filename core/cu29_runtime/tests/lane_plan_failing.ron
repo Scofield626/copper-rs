@@ -1,0 +1,336 @@
+// Two CopperLists per cycle on three worker threads. `right` is stateless, so
+// its two occurrences run on different workers with no order between them;
+// every stateful task is ordered across the two CopperLists and the cycle
+// boundary by explicit edges.
+(
+    runtime: (
+        thread_pools: [
+            (id: "bg", threads: 1),
+        ],
+        planner: (
+            type: "cu29::planner::Fixed",
+            config: {
+                "plan": {
+                    "version": 2,
+                    "missions": {
+                        "default": {
+                            "copperlists_per_cycle": 2,
+                            "max_in_flight": 4,
+                            "steps": [
+                                {
+                                    "key": "mission:default|task:src|phase:whole",
+                                    "copperlist": 0,
+                                },
+                                {
+                                    "key": "mission:default|task:left|phase:whole",
+                                    "copperlist": 0,
+                                },
+                                {
+                                    "key": "mission:default|task:right|phase:whole",
+                                    "copperlist": 0,
+                                },
+                                {
+                                    "key": "mission:default|task:join|phase:whole",
+                                    "copperlist": 0,
+                                },
+                                {
+                                    "key": "mission:default|task:sink|phase:whole",
+                                    "copperlist": 0,
+                                },
+                                {
+                                    "key": "mission:default|task:bg|phase:whole",
+                                    "copperlist": 0,
+                                },
+                                {
+                                    "key": "mission:default|task:sink2|phase:whole",
+                                    "copperlist": 0,
+                                },
+                                {
+                                    "key": "mission:default|task:src|phase:whole",
+                                    "copperlist": 1,
+                                },
+                                {
+                                    "key": "mission:default|task:left|phase:whole",
+                                    "copperlist": 1,
+                                },
+                                {
+                                    "key": "mission:default|task:right|phase:whole",
+                                    "copperlist": 1,
+                                },
+                                {
+                                    "key": "mission:default|task:join|phase:whole",
+                                    "copperlist": 1,
+                                },
+                                {
+                                    "key": "mission:default|task:sink|phase:whole",
+                                    "copperlist": 1,
+                                },
+                                {
+                                    "key": "mission:default|task:bg|phase:whole",
+                                    "copperlist": 1,
+                                },
+                                {
+                                    "key": "mission:default|task:sink2|phase:whole",
+                                    "copperlist": 1,
+                                },
+                            ],
+                            "workers": [
+                                {
+                                    "id": "w0",
+                                    "placement": {
+                                        "kind": "thread",
+                                    },
+                                    "steps": [
+                                        0,
+                                        7,
+                                        1,
+                                        8,
+                                    ],
+                                },
+                                {
+                                    "id": "w1",
+                                    "placement": {
+                                        "kind": "thread",
+                                    },
+                                    "steps": [
+                                        2,
+                                        3,
+                                        4,
+                                        5,
+                                        6,
+                                    ],
+                                },
+                                {
+                                    "id": "w2",
+                                    "placement": {
+                                        "kind": "thread",
+                                    },
+                                    "steps": [
+                                        9,
+                                        10,
+                                        11,
+                                        12,
+                                        13,
+                                    ],
+                                },
+                            ],
+                            "background": [
+                                {
+                                    "task": "bg",
+                                    "pool": "bg",
+                                    "max_running": 1,
+                                    "result": {
+                                        "kind": "lag",
+                                        "lag": 1,
+                                    },
+                                },
+                            ],
+                            "dependencies": [
+                                {
+                                    "from": 0,
+                                    "to": 1,
+                                    "cycle_lag": 0,
+                                },
+                                {
+                                    "from": 0,
+                                    "to": 2,
+                                    "cycle_lag": 0,
+                                },
+                                {
+                                    "from": 1,
+                                    "to": 3,
+                                    "cycle_lag": 0,
+                                },
+                                {
+                                    "from": 2,
+                                    "to": 3,
+                                    "cycle_lag": 0,
+                                },
+                                {
+                                    "from": 3,
+                                    "to": 4,
+                                    "cycle_lag": 0,
+                                },
+                                {
+                                    "from": 0,
+                                    "to": 5,
+                                    "cycle_lag": 0,
+                                },
+                                {
+                                    "from": 5,
+                                    "to": 6,
+                                    "cycle_lag": 0,
+                                },
+                                {
+                                    "from": 7,
+                                    "to": 8,
+                                    "cycle_lag": 0,
+                                },
+                                {
+                                    "from": 7,
+                                    "to": 9,
+                                    "cycle_lag": 0,
+                                },
+                                {
+                                    "from": 8,
+                                    "to": 10,
+                                    "cycle_lag": 0,
+                                },
+                                {
+                                    "from": 9,
+                                    "to": 10,
+                                    "cycle_lag": 0,
+                                },
+                                {
+                                    "from": 10,
+                                    "to": 11,
+                                    "cycle_lag": 0,
+                                },
+                                {
+                                    "from": 7,
+                                    "to": 12,
+                                    "cycle_lag": 0,
+                                },
+                                {
+                                    "from": 12,
+                                    "to": 13,
+                                    "cycle_lag": 0,
+                                },
+                                {
+                                    "from": 0,
+                                    "to": 7,
+                                    "cycle_lag": 0,
+                                },
+                                {
+                                    "from": 7,
+                                    "to": 0,
+                                    "cycle_lag": 1,
+                                },
+                                {
+                                    "from": 1,
+                                    "to": 8,
+                                    "cycle_lag": 0,
+                                },
+                                {
+                                    "from": 8,
+                                    "to": 1,
+                                    "cycle_lag": 1,
+                                },
+                                {
+                                    "from": 3,
+                                    "to": 10,
+                                    "cycle_lag": 0,
+                                },
+                                {
+                                    "from": 10,
+                                    "to": 3,
+                                    "cycle_lag": 1,
+                                },
+                                {
+                                    "from": 4,
+                                    "to": 11,
+                                    "cycle_lag": 0,
+                                },
+                                {
+                                    "from": 11,
+                                    "to": 4,
+                                    "cycle_lag": 1,
+                                },
+                                {
+                                    "from": 5,
+                                    "to": 12,
+                                    "cycle_lag": 0,
+                                },
+                                {
+                                    "from": 12,
+                                    "to": 5,
+                                    "cycle_lag": 1,
+                                },
+                                {
+                                    "from": 6,
+                                    "to": 13,
+                                    "cycle_lag": 0,
+                                },
+                                {
+                                    "from": 13,
+                                    "to": 6,
+                                    "cycle_lag": 1,
+                                },
+                            ],
+                        },
+                    },
+                },
+            },
+        ),
+    ),
+    tasks: [
+        (id: "src", type: "Source"),
+        (
+            id: "left",
+            type: "RunningSum",
+        ),
+        (
+            id: "right",
+            type: "Triple",
+            kind: stateless_task,
+        ),
+        (id: "join", type: "Join"),
+        (
+            id: "sink",
+            type: "Sink",
+            config: {
+                "app": "lane",
+                "stop_after": 200,
+                "fail_at": 50,
+            },
+        ),
+        (
+            id: "bg",
+            type: "Offset",
+            background: (pool: "bg"),
+        ),
+        (id: "sink2", type: "Sink2"),
+    ],
+    cnx: [
+        (
+            src: "src",
+            dst: "left",
+            msg: "u64",
+        ),
+        (
+            src: "src",
+            dst: "right",
+            msg: "u64",
+        ),
+        (
+            src: "left",
+            dst: "join",
+            msg: "u64",
+        ),
+        (
+            src: "right",
+            dst: "join",
+            msg: "u64",
+        ),
+        (
+            src: "join",
+            dst: "sink",
+            msg: "u64",
+        ),
+        (
+            src: "src",
+            dst: "bg",
+            msg: "u64",
+        ),
+        (
+            src: "bg",
+            dst: "sink2",
+            msg: "u64",
+        ),
+    ],
+    logging: (
+        slab_size_mib: 16,
+        copperlist_count: 4,
+        keyframe_interval: 7,
+    ),
+)

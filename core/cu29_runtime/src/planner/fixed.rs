@@ -1,0 +1,413 @@
+//! Portable, exact process schedules and their build-time enforcement.
+
+use super::AssembledPlan;
+use super::CuMissionPlan;
+use super::DEFAULT_COPPERLIST_COUNT;
+use super::FIXED_PLANNER;
+use super::LaneOccurrence;
+use super::LanePlan;
+use super::LaneWorker;
+use super::Linearity;
+use super::StepOrder;
+use super::assemble_from_order;
+use super::assemble_runtime_plan_for_mission;
+use super::assemble_runtime_plan_with_planner;
+use super::build_plan_graph;
+use super::configured_fixed_plan;
+use super::mission_graphs;
+use super::schedule::PlanShape;
+use super::step_key;
+use crate::config::ComponentConfig;
+use crate::config::CuConfig;
+use crate::config::CuGraph;
+use crate::config::NodeId;
+use crate::config::PlannerConfig;
+use crate::config::RuntimeConfig;
+use crate::config::Value;
+use crate::curuntime::CuExecutionUnit;
+use crate::curuntime::CuStepPhase;
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
+use cu29_traits::CuError;
+use cu29_traits::CuResult;
+use serde::Deserialize;
+use serde::Serialize;
+
+const PLAN_VERSION: u32 = 2;
+
+/// An experimental, portable process schedule for every mission in an app.
+///
+/// A plan represents serial and multicore schedules, including schedules
+/// spanning several CopperLists. Each mission is a repeating execution graph
+/// indexed by CopperList id: a step inventory, workers with their placement
+/// and order, background dispatch semantics, capacity, and precedence
+/// constraints across workers and repeating cycles.
+/// Entries retain existing error handling and anytime budget/skip semantics;
+/// fixing their order does not force optional refinements to run.
+///
+/// This is scheduling input, not serialized Rust code or message storage.
+/// Copper validates it against the task graph and generates typed calls and
+/// CopperList slots at compile time. Background work retains its configured
+/// execution semantics. Multicore representation and validation are available;
+/// execution currently supports only the serial subset through [`Fixed`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CuPlan {
+    /// Format version. Unsupported versions are rejected before use.
+    pub version: u32,
+    /// Resources (`bundle.resource`) that several components may use at the
+    /// same time. Every other resource bound by more than one component
+    /// orders those components like shared mutable state.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub concurrent_resources: Vec<String>,
+    /// Schedule indexed by mission id (`default` without named missions).
+    pub missions: BTreeMap<String, CuMissionPlan>,
+}
+
+impl CuPlan {
+    /// Export the effective generated schedule, including any baked custom
+    /// planner order or fixed plan already present in `config`.
+    pub fn from_config(config: &CuConfig) -> CuResult<Self> {
+        if let Some(plan) = configured_fixed_plan(config)? {
+            plan.validate(config)?;
+            return Ok(plan);
+        }
+        let mut missions = BTreeMap::new();
+        for (mission, graph) in mission_graphs(config) {
+            let plan = assemble_runtime_plan_for_mission(config, graph, &mission)?;
+            missions.insert(
+                mission.clone(),
+                PlanShape::new(&plan, config, graph, &mission, &[])?.serial_plan()?,
+            );
+        }
+        Ok(Self {
+            version: PLAN_VERSION,
+            concurrent_resources: Vec::new(),
+            missions,
+        })
+    }
+
+    /// Export the canonical schedule as an inventory of `copperlists_per_cycle`
+    /// CopperLists with every required edge, run in CopperList order by one
+    /// thread (the main thread when the cycle is one CopperList). This is the
+    /// starting point of a proposer, which moves occurrences between workers
+    /// and chooses their order itself.
+    pub fn from_config_cyclic(config: &CuConfig, copperlists_per_cycle: u32) -> CuResult<Self> {
+        if copperlists_per_cycle == 0 {
+            return Err(CuError::from("copperlists_per_cycle must be positive"));
+        }
+        let mut missions = BTreeMap::new();
+        for (mission, graph) in mission_graphs(config) {
+            let plan = assemble_runtime_plan_with_planner(config, graph, &Linearity)?;
+            missions.insert(
+                mission.clone(),
+                PlanShape::new(&plan, config, graph, &mission, &[])?
+                    .cyclic_plan(copperlists_per_cycle)?,
+            );
+        }
+        Ok(Self {
+            version: PLAN_VERSION,
+            concurrent_resources: Vec::new(),
+            missions,
+        })
+    }
+
+    /// Validate inventory, worker placement, capacity, background entries,
+    /// acyclic precedence, message dependencies, anytime phases, and mutable
+    /// task/bridge/resource state order within and across CopperLists. This
+    /// does not select an executor.
+    ///
+    /// CPU availability, runtime memory sizing, execution times, and deadline
+    /// feasibility are not properties checked by this structural validator.
+    pub fn validate(&self, config: &CuConfig) -> CuResult<()> {
+        self.validate_orders(config).map(|_| ())
+    }
+
+    /// Validate and return each mission's topological inventory order.
+    fn validate_orders(&self, config: &CuConfig) -> CuResult<BTreeMap<String, Vec<usize>>> {
+        self.check_version()?;
+        let missions = mission_graphs(config);
+        if !self.missions.keys().eq(missions.iter().map(|(id, _)| id)) {
+            return Err(CuError::from(
+                "Execution plan must contain exactly the configured missions",
+            ));
+        }
+        let mut orders = BTreeMap::new();
+        for (mission, graph) in missions {
+            let canonical = assemble_runtime_plan_with_planner(config, graph, &Linearity)?;
+            let shape = PlanShape::new(
+                &canonical,
+                config,
+                graph,
+                &mission,
+                &self.concurrent_resources,
+            )?;
+            let order = self.missions[&mission]
+                .validate(config, &shape)
+                .map_err(|e| CuError::from(format!("Plan for mission '{mission}': {e}")))?;
+            orders.insert(mission, order);
+        }
+        Ok(orders)
+    }
+
+    /// Raises `logging.copperlist_count` to the largest `max_in_flight` of
+    /// the plan, so the runtime preallocates what the plan keeps in flight.
+    pub fn provide_capacity(&self, config: &mut CuConfig) {
+        let needed = self
+            .missions
+            .values()
+            .map(|mission| mission.max_in_flight as usize)
+            .max()
+            .unwrap_or(0);
+        let current = config
+            .logging
+            .as_ref()
+            .and_then(|logging| logging.copperlist_count)
+            .unwrap_or(DEFAULT_COPPERLIST_COUNT);
+        if needed > current {
+            config
+                .logging
+                .get_or_insert_with(Default::default)
+                .copperlist_count = Some(needed);
+        }
+    }
+
+    /// Serialize a plan as human-editable RON. Graph legality is checked by
+    /// [`Fixed::apply`], not by serialization.
+    pub fn serialize_ron(&self) -> CuResult<String> {
+        self.check_version()?;
+        ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::default())
+            .map_err(|e| CuError::new_with_cause("Could not serialize execution plan", e))
+    }
+
+    /// Parse a saved plan and reject unsupported format versions.
+    pub fn deserialize_ron(text: &str) -> CuResult<Self> {
+        let plan: Self = ron::from_str(text)
+            .map_err(|e| CuError::new_with_cause("Could not parse execution plan", e))?;
+        plan.check_version()?;
+        Ok(plan)
+    }
+
+    /// Read a standalone plan file in host tooling or a build script.
+    #[cfg(feature = "std")]
+    pub fn read(path: &std::path::Path) -> CuResult<Self> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| CuError::new_with_cause("Could not read execution plan", e))?;
+        Self::deserialize_ron(&text)
+    }
+
+    /// Write a standalone plan file in host tooling or a build script.
+    #[cfg(feature = "std")]
+    pub fn write(&self, path: &std::path::Path) -> CuResult<()> {
+        std::fs::write(path, self.serialize_ron()?)
+            .map_err(|e| CuError::new_with_cause("Could not write execution plan", e))
+    }
+
+    fn check_version(&self) -> CuResult<()> {
+        if self.version != PLAN_VERSION {
+            return Err(CuError::from(format!(
+                "Unsupported execution plan version {}; expected {PLAN_VERSION}",
+                self.version
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Enforce an exact saved process schedule during runtime generation.
+///
+/// Select `cu29::planner::Fixed` with `config: { "plan": { ... } }`, or use
+/// [`Fixed::apply`] to produce that configuration from a [`CuPlan`]. Unlike
+/// [`super::Pinned`], no bridge placement or anytime scheduling heuristic is
+/// applied to the supplied sequence. Invalid plans are errors, never hints.
+/// Worker threads are set up from the plan itself; `runtime.thread_pools`
+/// keeps only background pools.
+///
+/// This consumes an already scheduled plan; [`super::CuPlanner`] remains the
+/// extension point for heuristics that choose a graph-node order. There is
+/// no runtime dispatcher, file I/O, or serialization on the execution path.
+/// A multicore plan is materialized with its `LanePlan` attached, for the
+/// lane executor to generate; the serial subset executes on the main thread.
+pub struct Fixed {
+    plan: CuPlan,
+}
+
+impl Fixed {
+    /// Take ownership of a saved plan. Its graph constraints are validated
+    /// when it is applied or consumed during runtime generation.
+    pub fn new(plan: CuPlan) -> CuResult<Self> {
+        plan.check_version()?;
+        Ok(Self { plan })
+    }
+
+    /// Validate all missions and select this fixed plan in `config`.
+    ///
+    /// Serialize the resulting config and compile the app against it. Changing
+    /// a deployed app's startup config cannot change its compiled schedule.
+    /// The config is left untouched if validation fails.
+    ///
+    /// ```
+    /// use cu29_runtime::config::CuConfig;
+    /// use cu29_runtime::planner::{CuPlan, Fixed};
+    /// # fn main() -> cu29_traits::CuResult<()> {
+    /// let mut config = CuConfig::deserialize_ron(
+    ///     r#"(tasks: [(id: "sensor", type: "Sensor", kind: source)])"#,
+    /// )?;
+    /// let plan = CuPlan::from_config(&config)?;
+    /// Fixed::new(plan)?.apply(&mut config)?;
+    /// let config_for_compilation = config.serialize_ron()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn apply(&self, config: &mut CuConfig) -> CuResult<()> {
+        let mut prepared = config.clone();
+        self.plan.provide_capacity(&mut prepared);
+        self.plan.validate(&prepared)?;
+        *config = prepared;
+        let value = cu29_value::to_value(&self.plan)
+            .map_err(|e| CuError::new_with_cause("Could not encode execution plan parameter", e))?;
+        let value = Value::deserialize(value)
+            .map_err(|e| CuError::new_with_cause("Could not embed execution plan", e))?;
+        let mut params = ComponentConfig::default();
+        params.set("plan", value);
+        config
+            .runtime
+            .get_or_insert_with(RuntimeConfig::default)
+            .planner = Some(PlannerConfig {
+            type_: FIXED_PLANNER.to_string(),
+            config: Some(params),
+            resolved: None,
+        });
+        Ok(())
+    }
+
+    pub(super) fn assemble(
+        &self,
+        config: &CuConfig,
+        graph: &CuGraph,
+        mission: &str,
+    ) -> CuResult<AssembledPlan> {
+        let orders = self
+            .plan
+            .validate(config)
+            .and_then(|()| self.plan.validate_orders(config))?;
+        let result = self.assemble_steps(config, graph, mission, &orders[mission]);
+        result.map_err(|e| CuError::from(format!("Fixed plan for mission '{mission}': {e}")))
+    }
+
+    fn assemble_steps(
+        &self,
+        config: &CuConfig,
+        graph: &CuGraph,
+        mission: &str,
+        order: &[usize],
+    ) -> CuResult<AssembledPlan> {
+        let plan = self
+            .plan
+            .missions
+            .get(mission)
+            .ok_or_else(|| CuError::from("Missing mission"))?;
+        let requested = if plan.is_serial() {
+            plan.serial_keys()?
+        } else {
+            plan.layout_keys(order)
+        };
+        // The canonical expansion enumerates legal identities, independent of
+        // the requested order. It is never substituted for the user's order.
+        let canonical = assemble_runtime_plan_with_planner(config, graph, &Linearity)?;
+        let keys = execution_keys(&canonical, mission)?;
+        let by_key: BTreeMap<_, _> = keys.iter().enumerate().map(|(i, key)| (key, i)).collect();
+        let mut node_order = Vec::with_capacity(canonical.entities.len());
+        for key in &requested {
+            let index = *by_key
+                .get(key)
+                .ok_or_else(|| CuError::from(format!("Unknown process step '{key}'")))?;
+            let CuExecutionUnit::Step(step) = &canonical.execution.steps[index] else {
+                return Err(CuError::from("Nested loops cannot be materialized"));
+            };
+            if step.phase != CuStepPhase::AnytimeRefine {
+                node_order.push(step.node_id);
+            }
+        }
+        // Recompute message slots from the supplied base-node order, then
+        // move the generated typed steps into the exact supplied phase order.
+        let mut assembled =
+            assemble_from_order(build_plan_graph(config, graph)?, StepOrder(node_order))?;
+        let remapped_keys = execution_keys(&assembled, mission)?;
+        let mut units: BTreeMap<_, _> = remapped_keys
+            .into_iter()
+            .zip(assembled.execution.steps)
+            .collect();
+        assembled.execution.steps = requested
+            .iter()
+            .map(|key| {
+                units.remove(key).ok_or_else(|| {
+                    CuError::from(format!("Could not materialize process step '{key}'"))
+                })
+            })
+            .collect::<CuResult<Vec<_>>>()?;
+        assembled.background = plan.background.clone();
+        if !plan.is_serial() {
+            let step_of: BTreeMap<_, _> = requested
+                .iter()
+                .enumerate()
+                .map(|(index, key)| (key.as_str(), index))
+                .collect();
+            assembled.lanes = Some(LanePlan {
+                copperlists_per_cycle: plan.copperlists_per_cycle,
+                max_in_flight: plan.max_in_flight,
+                occurrences: plan
+                    .steps
+                    .iter()
+                    .map(|step| LaneOccurrence {
+                        step: step_of[step.key.as_str()],
+                        copperlist: step.copperlist,
+                    })
+                    .collect(),
+                workers: plan
+                    .workers
+                    .iter()
+                    .map(|worker| LaneWorker {
+                        id: worker.id.clone(),
+                        placement: worker.placement.clone(),
+                        occurrences: worker.steps.iter().map(|&i| i as usize).collect(),
+                    })
+                    .collect(),
+                dispatcher: plan.dispatcher.clone(),
+                dependencies: plan.dependencies.clone(),
+            });
+        }
+        Ok(assembled)
+    }
+}
+
+pub(super) fn execution_keys(plan: &AssembledPlan, mission: &str) -> CuResult<Vec<String>> {
+    let mut refines: BTreeMap<NodeId, u32> = BTreeMap::new();
+    plan.execution
+        .steps
+        .iter()
+        .map(|unit| {
+            let CuExecutionUnit::Step(step) = unit else {
+                return Err(CuError::from(
+                    "Nested loops are not supported by plan version 1",
+                ));
+            };
+            let ordinal = if step.phase == CuStepPhase::AnytimeRefine {
+                let next = refines.entry(step.node_id).or_default();
+                *next += 1;
+                Some(*next)
+            } else {
+                None
+            };
+            Ok(step_key(
+                mission,
+                &plan.entities[step.node_id as usize],
+                step.phase,
+                ordinal,
+            ))
+        })
+        .collect()
+}

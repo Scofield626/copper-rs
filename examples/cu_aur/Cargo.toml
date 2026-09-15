@@ -1,0 +1,53 @@
+[package]
+name = "cu-aur"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "The Autoware Universe callback graph as a Copper application for profile-guided scheduling"
+default-run = "cu-aur"
+
+publish = false
+
+[dependencies]
+cu29 = { workspace = true }
+cu29-export = { workspace = true }
+bincode = { workspace = true, features = ["derive"] }
+chrono = { workspace = true }
+clap = { workspace = true }
+ron = "0.12"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[build-dependencies]
+cu29-build = { workspace = true }
+
+[features]
+default = []
+# The lane executor, needed to run a multicore plan.
+parallel-rt = ["cu29/parallel-rt"]
+# Real-time thread policies for a plan that asks for them.
+rt-scheduling = ["cu29/rt-scheduling"]
+# Build against copperconfig-pgo.ron, the config `just import` writes.
+pgo-plan = []
+
+[[bin]]
+name = "replay-check"
+path = "src/bin/replay-check.rs"
+
+[[bin]]
+name = "calibrate"
+path = "src/bin/calibrate.rs"
+
+[[bin]]
+name = "cu-aur-logreader"
+path = "src/bin/cu-aur-logreader.rs"
+
+[[bin]]
+name = "cu-aur"
+path = "src/main.rs"

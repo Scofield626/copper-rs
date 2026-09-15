@@ -1,6 +1,67 @@
 # Shared schedule visualizer used by the workspace and example-local Justfiles.
 PLAN_WORKSPACE_ROOT := source_directory() + "/../.."
 
+# Validate serial or multicore scheduling constraints without running the plan.
+[positional-arguments]
+plan-validate config="copperconfig.ron" plan="plan.ron" features="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "{{invocation_directory()}}"
+  args=("$1" --validate-plan "$2")
+  [[ -z "$3" ]] || args+=(--features "$3")
+  cargo run --manifest-path "{{PLAN_WORKSPACE_ROOT}}/Cargo.toml" -p cu29-runtime --bin cu29-plan -- "${args[@]}"
+
+# Export every mission's exact process-step sequence as editable RON.
+[positional-arguments]
+plan-export config="copperconfig.ron" output="plan.ron" features="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "{{invocation_directory()}}"
+  args=("$1" --export-plan "$2")
+  [[ -z "$3" ]] || args+=(--features "$3")
+  cargo run --manifest-path "{{PLAN_WORKSPACE_ROOT}}/Cargo.toml" -p cu29-runtime --bin cu29-plan -- "${args[@]}"
+
+# Validate a saved plan and embed it into a config for compilation.
+[positional-arguments]
+plan-import config="copperconfig.ron" plan="plan.ron" output="copperconfig-fixed.ron" features="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "{{invocation_directory()}}"
+  args=("$1" --import-plan "$2" --write-config "$3")
+  [[ -z "$4" ]] || args+=(--features "$4")
+  cargo run --manifest-path "{{PLAN_WORKSPACE_ROOT}}/Cargo.toml" -p cu29-runtime --bin cu29-plan -- "${args[@]}"
+
+# Measure a recorded run against a scheduling contract with the app's logreader.
+[positional-arguments]
+pgo-profile log bin contract="pgo.ron" output="pgo/profile.ron" config="copperconfig.ron" features="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "{{invocation_directory()}}"
+  mkdir -p "$(dirname "$4")"
+  args=(run --release --bin "$2")
+  [[ -z "$6" ]] || args+=(--features "$6")
+  args+=(-- "$1" pgo-profile --contract "$3" --output "$4" --config "$5")
+  [[ -z "$6" ]] || args+=(--features "$6")
+  cargo "${args[@]}"
+
+# Propose candidate plans for a contract from a profile.
+[positional-arguments]
+pgo-propose config="copperconfig.ron" contract="pgo.ron" profile="pgo/profile.ron" out_dir="pgo/candidates" cycle="1" candidates="3" features="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "{{invocation_directory()}}"
+  args=("$1" --propose "$2" --profile "$3" --out-dir "$4" --cycle "$5" --candidates "$6")
+  [[ -z "$7" ]] || args+=(--features "$7")
+  cargo run --manifest-path "{{PLAN_WORKSPACE_ROOT}}/Cargo.toml" -p cu29-runtime --bin cu29-plan -- "${args[@]}"
+
+# Embed a candidate into a config to compile the app against.
+[positional-arguments]
+pgo-import config="copperconfig.ron" plan="pgo/candidates/plan-1.ron" output="copperconfig-pgo.ron" features="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "{{invocation_directory()}}"
+  just plan-import "$1" "$2" "$3" "$4"
+
 # Render the generated schedule for a config in the invocation directory.
 [positional-arguments]
 plan *options:

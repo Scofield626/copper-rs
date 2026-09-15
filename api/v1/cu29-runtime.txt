@@ -218,6 +218,7 @@ pub enum cu29_runtime::config::TaskKind
 pub cu29_runtime::config::TaskKind::Regular
 pub cu29_runtime::config::TaskKind::Sink
 pub cu29_runtime::config::TaskKind::Source
+pub cu29_runtime::config::TaskKind::Stateless
 impl cu29_runtime::config::TaskKind
 pub fn cu29_runtime::config::TaskKind::as_str(&self) -> &'static str
 impl core::convert::From<cu29_runtime::config::TaskKind> for cu29_runtime::curuntime::CuTaskType
@@ -451,6 +452,7 @@ pub fn cu29_runtime::config::Node::is_anytime(&self) -> bool
 pub fn cu29_runtime::config::Node::is_background(&self) -> bool
 pub fn cu29_runtime::config::Node::is_logging_enabled(&self) -> bool
 pub fn cu29_runtime::config::Node::is_run_in_sim(&self) -> bool
+pub fn cu29_runtime::config::Node::is_stateless_task(&self) -> bool
 pub fn cu29_runtime::config::Node::nc_outputs(&self) -> &[alloc::string::String]
 pub fn cu29_runtime::config::Node::nc_outputs_with_order(&self) -> impl core::iter::traits::iterator::Iterator<Item = (&alloc::string::String, usize)>
 pub fn cu29_runtime::config::Node::new(id: &str, ptype: &str) -> Self
@@ -729,6 +731,7 @@ pub mod cu29_runtime::cuasynctask
 pub struct cu29_runtime::cuasynctask::CuAsyncSrcTask<T, O> where T: for<'m> cu29_runtime::cutask::CuSrcTask<Output<'m> = cu29_runtime::cutask::CuMsg<O>> + core::marker::Send + 'static, O: cu29_runtime::cutask::CuMsgPayload + core::marker::Send + 'static
 impl<T, O> cu29_runtime::cuasynctask::CuAsyncSrcTask<T, O> where T: for<'m> cu29_runtime::cutask::CuSrcTask<Output<'m> = cu29_runtime::cutask::CuMsg<O>> + core::marker::Send + 'static, O: cu29_runtime::cutask::CuMsgPayload + core::marker::Send + 'static
 pub fn cu29_runtime::cuasynctask::CuAsyncSrcTask<T, O>::new(config: core::option::Option<&cu29_runtime::config::ComponentConfig>, resources: <T as cu29_runtime::cutask::CuSrcTask>::Resources, tp: alloc::sync::Arc<rayon_core::thread_pool::ThreadPool>) -> cu29_traits::CuResult<Self>
+pub fn cu29_runtime::cuasynctask::CuAsyncSrcTask<T, O>::wait_for_job(&self) -> cu29_traits::CuResult<()>
 impl<T, O> cu29_runtime::cutask::CuSrcTask for cu29_runtime::cuasynctask::CuAsyncSrcTask<T, O> where T: for<'m> cu29_runtime::cutask::CuSrcTask<Output<'m> = cu29_runtime::cutask::CuMsg<O>> + core::marker::Send + 'static, O: cu29_runtime::cutask::CuMsgPayload + core::marker::Send + 'static
 pub type cu29_runtime::cuasynctask::CuAsyncSrcTask<T, O>::Output<'m> = <T as cu29_runtime::cutask::CuSrcTask>::Output
 pub type cu29_runtime::cuasynctask::CuAsyncSrcTask<T, O>::Resources<'r> = cu29_runtime::cuasynctask::CuAsyncSrcTaskResources<'r, T>
@@ -756,6 +759,7 @@ pub cu29_runtime::cuasynctask::CuAsyncSrcTaskResources::threadpool: alloc::sync:
 pub struct cu29_runtime::cuasynctask::CuAsyncTask<T, O> where T: for<'m> cu29_runtime::cutask::CuTask<Output<'m> = cu29_runtime::cutask::CuMsg<O>> + core::marker::Send + 'static, O: cu29_runtime::cutask::CuMsgPayload + core::marker::Send + 'static
 impl<T, O> cu29_runtime::cuasynctask::CuAsyncTask<T, O> where T: for<'m> cu29_runtime::cutask::CuTask<Output<'m> = cu29_runtime::cutask::CuMsg<O>> + core::marker::Send + 'static, O: cu29_runtime::cutask::CuMsgPayload + core::marker::Send + 'static
 pub fn cu29_runtime::cuasynctask::CuAsyncTask<T, O>::new(config: core::option::Option<&cu29_runtime::config::ComponentConfig>, resources: <T as cu29_runtime::cutask::CuTask>::Resources, tp: alloc::sync::Arc<rayon_core::thread_pool::ThreadPool>) -> cu29_traits::CuResult<Self>
+pub fn cu29_runtime::cuasynctask::CuAsyncTask<T, O>::wait_for_job(&self) -> cu29_traits::CuResult<()>
 impl<T, I, O> cu29_runtime::cutask::CuTask for cu29_runtime::cuasynctask::CuAsyncTask<T, O> where T: for<'i, 'o> cu29_runtime::cutask::CuTask<Input<'i> = cu29_runtime::cutask::CuMsg<I>, Output<'o> = cu29_runtime::cutask::CuMsg<O>> + core::marker::Send + 'static, I: cu29_runtime::cutask::CuMsgPayload + core::marker::Send + core::marker::Sync + 'static, O: cu29_runtime::cutask::CuMsgPayload + core::marker::Send + 'static
 pub type cu29_runtime::cuasynctask::CuAsyncTask<T, O>::Input<'m> = <T as cu29_runtime::cutask::CuTask>::Input
 pub type cu29_runtime::cuasynctask::CuAsyncTask<T, O>::Output<'m> = <T as cu29_runtime::cutask::CuTask>::Output
@@ -987,10 +991,13 @@ pub fn cu29_runtime::curuntime::RuntimeLifecycleStackInfo::borrow_decode<__D: cu
 impl<__Context> cu_bincode::de::Decode<__Context> for cu29_runtime::curuntime::RuntimeLifecycleStackInfo
 pub fn cu29_runtime::curuntime::RuntimeLifecycleStackInfo::decode<__D: cu_bincode::de::Decoder<Context = __Context>>(decoder: &mut __D) -> core::result::Result<Self, cu_bincode::error::DecodeError>
 pub fn cu29_runtime::curuntime::compute_runtime_plan(graph: &cu29_runtime::config::CuGraph) -> cu29_traits::CuResult<cu29_runtime::curuntime::CuExecutionLoop>
+pub fn cu29_runtime::curuntime::ensure_stop_handler(install: impl core::ops::function::FnOnce())
 pub fn cu29_runtime::curuntime::expand_anytime_steps(plan: &mut cu29_runtime::curuntime::CuExecutionLoop) -> cu29_traits::CuResult<()>
 pub fn cu29_runtime::curuntime::find_task_type_for_id(graph: &cu29_runtime::config::CuGraph, node_id: cu29_runtime::config::NodeId) -> cu29_traits::CuResult<cu29_runtime::curuntime::CuTaskType>
 pub fn cu29_runtime::curuntime::perf_now(_clock: &cu29_clock::RobotClock) -> cu29_clock::CuTime
 pub fn cu29_runtime::curuntime::rate_target_period(rate_target_hz: u64) -> cu29_traits::CuResult<cu29_clock::CuDuration>
+pub fn cu29_runtime::curuntime::register_stop_flag(flag: &'static core::sync::atomic::AtomicBool)
+pub fn cu29_runtime::curuntime::request_stop_all()
 pub mod cu29_runtime::cutask
 pub struct cu29_runtime::cutask::BincodeAdapter<'a, T: cu29_runtime::cutask::Freezable + ?core::marker::Sized>(pub &'a T)
 impl<'a, T: cu29_runtime::cutask::Freezable + ?core::marker::Sized> cu_bincode::enc::Encode for cu29_runtime::cutask::BincodeAdapter<'a, T>
@@ -1149,6 +1156,19 @@ pub fn cu29_runtime::simulation::CuSimSrcTask<T>::register_debug_state_types(reg
 pub fn cu29_runtime::simulation::CuSimSrcTask<T>::start(&mut self, _ctx: &cu29_runtime::context::CuContext) -> cu29_traits::CuResult<()>
 pub fn cu29_runtime::simulation::CuSimSrcTask<T>::stop(&mut self, _ctx: &cu29_runtime::context::CuContext) -> cu29_traits::CuResult<()>
 pub fn cu29_runtime::simulation::CuSimSrcTask<T>::with_debug_state<R>(&self, f: impl core::ops::function::FnOnce(&dyn cu29_runtime::reflect::Reflect) -> R) -> R where Self: core::marker::Sized
+pub trait cu29_runtime::cutask::CuStatelessTask: cu29_runtime::cutask::Freezable + cu29_runtime::reflect::Reflect + core::marker::Send + core::marker::Sync
+pub type cu29_runtime::cutask::CuStatelessTask::Input<'m>: cu29_runtime::cutask::CuMsgPack
+pub type cu29_runtime::cutask::CuStatelessTask::Output<'m>: cu29_runtime::cutask::CuMsgPayload
+pub type cu29_runtime::cutask::CuStatelessTask::Resources<'r>
+pub fn cu29_runtime::cutask::CuStatelessTask::debug_state_type_path() -> &'static str where Self: cu29_runtime::reflect::TypePath + core::marker::Sized
+pub fn cu29_runtime::cutask::CuStatelessTask::new(_config: core::option::Option<&cu29_runtime::config::ComponentConfig>, _resources: Self::Resources) -> cu29_traits::CuResult<Self> where Self: core::marker::Sized
+pub fn cu29_runtime::cutask::CuStatelessTask::postprocess(&self, _ctx: &cu29_runtime::context::CuContext) -> cu29_traits::CuResult<()>
+pub fn cu29_runtime::cutask::CuStatelessTask::preprocess(&self, _ctx: &cu29_runtime::context::CuContext) -> cu29_traits::CuResult<()>
+pub fn cu29_runtime::cutask::CuStatelessTask::process<'i, 'o>(&self, ctx: &cu29_runtime::context::CuContext, input: &Self::Input, output: &mut Self::Output) -> cu29_traits::CuResult<()>
+pub fn cu29_runtime::cutask::CuStatelessTask::register_debug_state_types(registry: &mut cu29_runtime::reflect::TypeRegistry) where Self: cu29_runtime::reflect::GetTypeRegistration + core::marker::Sized
+pub fn cu29_runtime::cutask::CuStatelessTask::start(&mut self, _ctx: &cu29_runtime::context::CuContext) -> cu29_traits::CuResult<()>
+pub fn cu29_runtime::cutask::CuStatelessTask::stop(&mut self, _ctx: &cu29_runtime::context::CuContext) -> cu29_traits::CuResult<()>
+pub fn cu29_runtime::cutask::CuStatelessTask::with_debug_state<R>(&self, f: impl core::ops::function::FnOnce(&dyn cu29_runtime::reflect::Reflect) -> R) -> R where Self: core::marker::Sized
 pub trait cu29_runtime::cutask::CuTask: cu29_runtime::cutask::Freezable + cu29_runtime::reflect::Reflect
 pub type cu29_runtime::cutask::CuTask::Input<'m>: cu29_runtime::cutask::CuMsgPack
 pub type cu29_runtime::cutask::CuTask::Output<'m>: cu29_runtime::cutask::CuMsgPayload
@@ -1802,6 +1822,174 @@ pub fn cu29_runtime::payload::CuArrayVec<T, N>::short_type_path() -> &'static st
 pub fn cu29_runtime::payload::CuArrayVec<T, N>::type_ident() -> core::option::Option<&'static str>
 pub fn cu29_runtime::payload::CuArrayVec<T, N>::type_path() -> &'static str
 pub mod cu29_runtime::planner
+pub enum cu29_runtime::planner::CuObjectiveKind
+pub cu29_runtime::planner::CuObjectiveKind::Deadline
+pub cu29_runtime::planner::CuObjectiveKind::Sum
+pub enum cu29_runtime::planner::CuPlanBackgroundResult
+pub cu29_runtime::planner::CuPlanBackgroundResult::Lag
+pub cu29_runtime::planner::CuPlanBackgroundResult::Lag::lag: u32
+pub cu29_runtime::planner::CuPlanBackgroundResult::Sampled
+pub enum cu29_runtime::planner::CuPlanPlacement
+pub cu29_runtime::planner::CuPlanPlacement::Main
+pub cu29_runtime::planner::CuPlanPlacement::Thread
+pub cu29_runtime::planner::CuPlanPlacement::Thread::cpu: core::option::Option<usize>
+pub cu29_runtime::planner::CuPlanPlacement::Thread::policy: cu29_runtime::config::SchedulingPolicy
+pub struct cu29_runtime::planner::CuBackgroundPool
+pub cu29_runtime::planner::CuBackgroundPool::cpus: alloc::vec::Vec<usize>
+pub cu29_runtime::planner::CuBackgroundPool::id: alloc::string::String
+pub cu29_runtime::planner::CuBackgroundPool::policy: cu29_runtime::config::SchedulingPolicy
+pub struct cu29_runtime::planner::CuCandidate
+pub cu29_runtime::planner::CuCandidate::plan: cu29_runtime::planner::CuPlan
+pub cu29_runtime::planner::CuCandidate::prediction: cu29_runtime::planner::CuPrediction
+pub struct cu29_runtime::planner::CuChain
+pub cu29_runtime::planner::CuChain::deadline_ms: u32
+pub cu29_runtime::planner::CuChain::id: alloc::string::String
+pub cu29_runtime::planner::CuChain::sink: alloc::string::String
+pub cu29_runtime::planner::CuChain::source: alloc::string::String
+pub struct cu29_runtime::planner::CuChainPrediction
+pub cu29_runtime::planner::CuChainPrediction::deadline_ns: u64
+pub cu29_runtime::planner::CuChainPrediction::latency_ns: u64
+pub cu29_runtime::planner::CuChainPrediction::ratio: f64
+pub struct cu29_runtime::planner::CuChainProfile
+pub cu29_runtime::planner::CuChainProfile::deadline_ms: u32
+pub cu29_runtime::planner::CuChainProfile::latency: cu29_runtime::planner::CuCostStats
+pub cu29_runtime::planner::CuChainProfile::misses: u64
+pub struct cu29_runtime::planner::CuChainScore
+pub cu29_runtime::planner::CuChainScore::deadline_ms: u32
+pub cu29_runtime::planner::CuChainScore::max_ns: u64
+pub cu29_runtime::planner::CuChainScore::misses: u64
+pub cu29_runtime::planner::CuChainScore::p50_ns: u64
+pub cu29_runtime::planner::CuChainScore::p99_ns: u64
+pub cu29_runtime::planner::CuChainScore::predicted_ns: core::option::Option<u64>
+pub cu29_runtime::planner::CuChainScore::samples: u64
+pub struct cu29_runtime::planner::CuContract
+pub cu29_runtime::planner::CuContract::background_pools: alloc::vec::Vec<cu29_runtime::planner::CuBackgroundPool>
+pub cu29_runtime::planner::CuContract::chains: alloc::vec::Vec<cu29_runtime::planner::CuChain>
+pub cu29_runtime::planner::CuContract::concurrent_safe_resources: alloc::vec::Vec<alloc::string::String>
+pub cu29_runtime::planner::CuContract::cpus: alloc::vec::Vec<usize>
+pub cu29_runtime::planner::CuContract::dispatcher: core::option::Option<cu29_runtime::planner::CuPlanThread>
+pub cu29_runtime::planner::CuContract::max_in_flight: u32
+pub cu29_runtime::planner::CuContract::objective: cu29_runtime::planner::CuObjective
+pub cu29_runtime::planner::CuContract::sources: alloc::vec::Vec<cu29_runtime::planner::CuSourceRate>
+pub cu29_runtime::planner::CuContract::worker_policy: cu29_runtime::config::SchedulingPolicy
+impl cu29_runtime::planner::CuContract
+pub fn cu29_runtime::planner::CuContract::deserialize_ron(text: &str) -> cu29_traits::CuResult<Self>
+pub fn cu29_runtime::planner::CuContract::read(path: &std::path::Path) -> cu29_traits::CuResult<Self>
+pub fn cu29_runtime::planner::CuContract::validate(&self, config: &cu29_runtime::config::CuConfig, mission: core::option::Option<&str>) -> cu29_traits::CuResult<()>
+pub struct cu29_runtime::planner::CuCostStats
+pub cu29_runtime::planner::CuCostStats::max_ns: u64
+pub cu29_runtime::planner::CuCostStats::mean_ns: f64
+pub cu29_runtime::planner::CuCostStats::min_ns: u64
+pub cu29_runtime::planner::CuCostStats::p50_ns: u64
+pub cu29_runtime::planner::CuCostStats::p95_ns: u64
+pub cu29_runtime::planner::CuCostStats::p99_ns: u64
+pub cu29_runtime::planner::CuCostStats::samples: u64
+impl cu29_runtime::planner::CuCostStats
+pub fn cu29_runtime::planner::CuCostStats::from_samples(samples: &mut [u64]) -> Self
+pub struct cu29_runtime::planner::CuMissionPlan
+pub cu29_runtime::planner::CuMissionPlan::background: alloc::vec::Vec<cu29_runtime::planner::CuPlanBackground>
+pub cu29_runtime::planner::CuMissionPlan::copperlists_per_cycle: u32
+pub cu29_runtime::planner::CuMissionPlan::dependencies: alloc::vec::Vec<cu29_runtime::planner::CuPlanDependency>
+pub cu29_runtime::planner::CuMissionPlan::dispatcher: core::option::Option<cu29_runtime::planner::CuPlanThread>
+pub cu29_runtime::planner::CuMissionPlan::max_in_flight: u32
+pub cu29_runtime::planner::CuMissionPlan::steps: alloc::vec::Vec<cu29_runtime::planner::CuPlanStep>
+pub cu29_runtime::planner::CuMissionPlan::workers: alloc::vec::Vec<cu29_runtime::planner::CuPlanWorker>
+impl cu29_runtime::planner::CuMissionPlan
+pub fn cu29_runtime::planner::CuMissionPlan::is_serial(&self) -> bool
+pub fn cu29_runtime::planner::CuMissionPlan::nondeterminism(&self) -> alloc::vec::Vec<alloc::string::String>
+pub struct cu29_runtime::planner::CuObjective
+pub cu29_runtime::planner::CuObjective::kind: cu29_runtime::planner::CuObjectiveKind
+pub cu29_runtime::planner::CuObjective::margin: f64
+impl core::default::Default for cu29_runtime::planner::CuObjective
+pub fn cu29_runtime::planner::CuObjective::default() -> Self
+pub struct cu29_runtime::planner::CuOperationProfile
+pub cu29_runtime::planner::CuOperationProfile::fired: cu29_runtime::planner::CuCostStats
+pub cu29_runtime::planner::CuOperationProfile::firing_rate_hz: f64
+pub cu29_runtime::planner::CuOperationProfile::skipped: cu29_runtime::planner::CuCostStats
+pub struct cu29_runtime::planner::CuPlan
+pub cu29_runtime::planner::CuPlan::concurrent_resources: alloc::vec::Vec<alloc::string::String>
+pub cu29_runtime::planner::CuPlan::missions: alloc::collections::btree::map::BTreeMap<alloc::string::String, cu29_runtime::planner::CuMissionPlan>
+pub cu29_runtime::planner::CuPlan::version: u32
+impl cu29_runtime::planner::CuPlan
+pub fn cu29_runtime::planner::CuPlan::deserialize_ron(text: &str) -> cu29_traits::CuResult<Self>
+pub fn cu29_runtime::planner::CuPlan::from_config(config: &cu29_runtime::config::CuConfig) -> cu29_traits::CuResult<Self>
+pub fn cu29_runtime::planner::CuPlan::from_config_cyclic(config: &cu29_runtime::config::CuConfig, copperlists_per_cycle: u32) -> cu29_traits::CuResult<Self>
+pub fn cu29_runtime::planner::CuPlan::provide_capacity(&self, config: &mut cu29_runtime::config::CuConfig)
+pub fn cu29_runtime::planner::CuPlan::read(path: &std::path::Path) -> cu29_traits::CuResult<Self>
+pub fn cu29_runtime::planner::CuPlan::serialize_ron(&self) -> cu29_traits::CuResult<alloc::string::String>
+pub fn cu29_runtime::planner::CuPlan::validate(&self, config: &cu29_runtime::config::CuConfig) -> cu29_traits::CuResult<()>
+pub fn cu29_runtime::planner::CuPlan::write(&self, path: &std::path::Path) -> cu29_traits::CuResult<()>
+pub struct cu29_runtime::planner::CuPlanBackground
+pub cu29_runtime::planner::CuPlanBackground::max_running: u32
+pub cu29_runtime::planner::CuPlanBackground::pool: alloc::string::String
+pub cu29_runtime::planner::CuPlanBackground::result: cu29_runtime::planner::CuPlanBackgroundResult
+pub cu29_runtime::planner::CuPlanBackground::task: alloc::string::String
+pub struct cu29_runtime::planner::CuPlanDependency
+pub cu29_runtime::planner::CuPlanDependency::cycle_lag: u32
+pub cu29_runtime::planner::CuPlanDependency::from: u32
+pub cu29_runtime::planner::CuPlanDependency::to: u32
+pub struct cu29_runtime::planner::CuPlanStep
+pub cu29_runtime::planner::CuPlanStep::copperlist: u32
+pub cu29_runtime::planner::CuPlanStep::key: alloc::string::String
+pub struct cu29_runtime::planner::CuPlanThread
+pub cu29_runtime::planner::CuPlanThread::cpu: core::option::Option<usize>
+pub cu29_runtime::planner::CuPlanThread::policy: cu29_runtime::config::SchedulingPolicy
+pub struct cu29_runtime::planner::CuPlanWorker
+pub cu29_runtime::planner::CuPlanWorker::id: alloc::string::String
+pub cu29_runtime::planner::CuPlanWorker::placement: cu29_runtime::planner::CuPlanPlacement
+pub cu29_runtime::planner::CuPlanWorker::steps: alloc::vec::Vec<u32>
+pub struct cu29_runtime::planner::CuPrediction
+pub cu29_runtime::planner::CuPrediction::chains: alloc::collections::btree::map::BTreeMap<alloc::string::String, cu29_runtime::planner::CuChainPrediction>
+pub cu29_runtime::planner::CuPrediction::score: alloc::vec::Vec<f64>
+pub cu29_runtime::planner::CuPrediction::sources: alloc::collections::btree::map::BTreeMap<alloc::string::String, f64>
+pub cu29_runtime::planner::CuPrediction::workers: alloc::collections::btree::map::BTreeMap<alloc::string::String, cu29_runtime::planner::CuWorkerPrediction>
+pub struct cu29_runtime::planner::CuProfile
+pub cu29_runtime::planner::CuProfile::chains: alloc::collections::btree::map::BTreeMap<alloc::string::String, cu29_runtime::planner::CuChainProfile>
+pub cu29_runtime::planner::CuProfile::config_signature: alloc::string::String
+pub cu29_runtime::planner::CuProfile::copperlist_span: cu29_runtime::planner::CuCostStats
+pub cu29_runtime::planner::CuProfile::copperlists: u64
+pub cu29_runtime::planner::CuProfile::mission: alloc::string::String
+pub cu29_runtime::planner::CuProfile::operations: alloc::collections::btree::map::BTreeMap<alloc::string::String, cu29_runtime::planner::CuOperationProfile>
+pub cu29_runtime::planner::CuProfile::sources: alloc::collections::btree::map::BTreeMap<alloc::string::String, cu29_runtime::planner::CuSourceProfile>
+pub cu29_runtime::planner::CuProfile::version: u32
+pub cu29_runtime::planner::CuProfile::window_ns: u64
+impl cu29_runtime::planner::CuProfile
+pub fn cu29_runtime::planner::CuProfile::deserialize_ron(text: &str) -> cu29_traits::CuResult<Self>
+pub fn cu29_runtime::planner::CuProfile::new(config_signature: alloc::string::String, mission: alloc::string::String) -> Self
+pub fn cu29_runtime::planner::CuProfile::read(path: &std::path::Path) -> cu29_traits::CuResult<Self>
+pub fn cu29_runtime::planner::CuProfile::serialize_ron(&self) -> cu29_traits::CuResult<alloc::string::String>
+pub fn cu29_runtime::planner::CuProfile::write(&self, path: &std::path::Path) -> cu29_traits::CuResult<()>
+pub struct cu29_runtime::planner::CuScoreRow
+pub cu29_runtime::planner::CuScoreRow::candidate: alloc::string::String
+pub cu29_runtime::planner::CuScoreRow::chains: alloc::collections::btree::map::BTreeMap<alloc::string::String, cu29_runtime::planner::CuChainScore>
+pub cu29_runtime::planner::CuScoreRow::predicted: core::option::Option<cu29_runtime::planner::CuPrediction>
+pub cu29_runtime::planner::CuScoreRow::score: alloc::vec::Vec<f64>
+pub cu29_runtime::planner::CuScoreRow::sources: alloc::collections::btree::map::BTreeMap<alloc::string::String, f64>
+pub struct cu29_runtime::planner::CuScoreTable
+pub cu29_runtime::planner::CuScoreTable::rows: alloc::vec::Vec<cu29_runtime::planner::CuScoreRow>
+impl cu29_runtime::planner::CuScoreTable
+pub fn cu29_runtime::planner::CuScoreTable::best(&self) -> core::option::Option<&cu29_runtime::planner::CuScoreRow>
+pub fn cu29_runtime::planner::CuScoreTable::new(contract: &cu29_runtime::planner::CuContract, predictions: &alloc::collections::btree::map::BTreeMap<alloc::string::String, cu29_runtime::planner::CuPrediction>, measured: &alloc::collections::btree::map::BTreeMap<alloc::string::String, cu29_runtime::planner::CuProfile>) -> cu29_traits::CuResult<Self>
+pub fn cu29_runtime::planner::CuScoreTable::serialize_ron(&self) -> cu29_traits::CuResult<alloc::string::String>
+impl core::fmt::Display for cu29_runtime::planner::CuScoreTable
+pub fn cu29_runtime::planner::CuScoreTable::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct cu29_runtime::planner::CuSourceProfile
+pub cu29_runtime::planner::CuSourceProfile::delivered_rate: f64
+pub cu29_runtime::planner::CuSourceProfile::expected: f64
+pub cu29_runtime::planner::CuSourceProfile::fired: u64
+pub cu29_runtime::planner::CuSourceProfile::period_ms: u32
+pub struct cu29_runtime::planner::CuSourceRate
+pub cu29_runtime::planner::CuSourceRate::period_ms: u32
+pub cu29_runtime::planner::CuSourceRate::task: alloc::string::String
+pub struct cu29_runtime::planner::CuWorkerPrediction
+pub cu29_runtime::planner::CuWorkerPrediction::cpu: usize
+pub cu29_runtime::planner::CuWorkerPrediction::load: f64
+pub cu29_runtime::planner::CuWorkerPrediction::rate: f64
+pub cu29_runtime::planner::CuWorkerPrediction::response_ns: core::option::Option<u64>
+pub struct cu29_runtime::planner::Fixed
+impl cu29_runtime::planner::Fixed
+pub fn cu29_runtime::planner::Fixed::apply(&self, config: &mut cu29_runtime::config::CuConfig) -> cu29_traits::CuResult<()>
+pub fn cu29_runtime::planner::Fixed::new(plan: cu29_runtime::planner::CuPlan) -> cu29_traits::CuResult<Self>
 pub struct cu29_runtime::planner::Linearity
 impl cu29_runtime::planner::CuPlanner for cu29_runtime::planner::Linearity
 pub fn cu29_runtime::planner::Linearity::new(_config: core::option::Option<&cu29_runtime::config::ComponentConfig>) -> cu29_traits::CuResult<Self>
@@ -1810,6 +1998,16 @@ pub struct cu29_runtime::planner::Pinned
 impl cu29_runtime::planner::CuPlanner for cu29_runtime::planner::Pinned
 pub fn cu29_runtime::planner::Pinned::new(config: core::option::Option<&cu29_runtime::config::ComponentConfig>) -> cu29_traits::CuResult<Self>
 pub fn cu29_runtime::planner::Pinned::plan(&self, graph: &cu29_runtime::config::CuGraph) -> cu29_traits::CuResult<cu29_runtime::planner::StepOrder>
+pub struct cu29_runtime::planner::ProposeRequest<'a>
+pub cu29_runtime::planner::ProposeRequest::candidates: usize
+pub cu29_runtime::planner::ProposeRequest::config: &'a cu29_runtime::config::CuConfig
+pub cu29_runtime::planner::ProposeRequest::contract: &'a cu29_runtime::planner::CuContract
+pub cu29_runtime::planner::ProposeRequest::copperlists_per_cycle: u32
+pub cu29_runtime::planner::ProposeRequest::mission: &'a str
+pub cu29_runtime::planner::ProposeRequest::moves: usize
+pub cu29_runtime::planner::ProposeRequest::profile: &'a cu29_runtime::planner::CuProfile
+pub cu29_runtime::planner::ProposeRequest::restarts: usize
+pub cu29_runtime::planner::ProposeRequest::seed: u64
 pub struct cu29_runtime::planner::StepOrder(pub alloc::vec::Vec<cu29_runtime::config::NodeId>)
 pub trait cu29_runtime::planner::CuPlanner
 pub fn cu29_runtime::planner::CuPlanner::new(config: core::option::Option<&cu29_runtime::config::ComponentConfig>) -> cu29_traits::CuResult<Self> where Self: core::marker::Sized
@@ -1821,6 +2019,8 @@ impl cu29_runtime::planner::CuPlanner for cu29_runtime::planner::Pinned
 pub fn cu29_runtime::planner::Pinned::new(config: core::option::Option<&cu29_runtime::config::ComponentConfig>) -> cu29_traits::CuResult<Self>
 pub fn cu29_runtime::planner::Pinned::plan(&self, graph: &cu29_runtime::config::CuGraph) -> cu29_traits::CuResult<cu29_runtime::planner::StepOrder>
 pub fn cu29_runtime::planner::emit_plan<P: cu29_runtime::planner::CuPlanner>(config_path: &str) -> cu29_traits::CuResult<()>
+pub fn cu29_runtime::planner::graph_signature(graph: &cu29_runtime::config::CuGraph, mission: core::option::Option<&str>) -> alloc::string::String
+pub fn cu29_runtime::planner::propose(request: &cu29_runtime::planner::ProposeRequest<'_>) -> cu29_traits::CuResult<alloc::vec::Vec<cu29_runtime::planner::CuCandidate>>
 pub mod cu29_runtime::pool
 pub enum cu29_runtime::pool::CuHandleInner<T: core::fmt::Debug + core::marker::Send + core::marker::Sync>
 pub cu29_runtime::pool::CuHandleInner::Detached(alloc::boxed::Box<T>)

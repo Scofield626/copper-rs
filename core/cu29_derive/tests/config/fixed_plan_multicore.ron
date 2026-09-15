@@ -1,0 +1,74 @@
+(
+    runtime: (
+        planner: (
+            type: "cu29::planner::Fixed",
+            config: {
+                "plan": {
+                    "version": 2,
+                    "missions": {
+                        "default": {
+                            "copperlists_per_cycle": 1,
+                            "max_in_flight": 2,
+                            "steps": [
+                                {
+                                    "key": "mission:default|task:src|phase:whole",
+                                    "copperlist": 0,
+                                },
+                                {
+                                    "key": "mission:default|task:sink|phase:whole",
+                                    "copperlist": 0,
+                                },
+                            ],
+                            "workers": [
+                                {
+                                    "id": "w0",
+                                    "placement": {
+                                        "kind": "thread",
+                                    },
+                                    "steps": [
+                                        0,
+                                    ],
+                                },
+                                {
+                                    "id": "w1",
+                                    "placement": {
+                                        "kind": "thread",
+                                    },
+                                    "steps": [
+                                        1,
+                                    ],
+                                },
+                            ],
+                            "dependencies": [
+                                {
+                                    "from": 0,
+                                    "to": 1,
+                                    "cycle_lag": 0,
+                                },
+                            ],
+                        },
+                    },
+                },
+            },
+        ),
+    ),
+    tasks: [
+        (
+            id: "src",
+            type: "IntSource",
+            kind: source,
+        ),
+        (
+            id: "sink",
+            type: "IntSink",
+            kind: sink,
+        ),
+    ],
+    cnx: [
+        (
+            src: "src",
+            dst: "sink",
+            msg: "i32",
+        ),
+    ],
+)

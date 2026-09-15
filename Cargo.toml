@@ -89,6 +89,7 @@ members = [
   "examples/cu_anytime_anynet",
   "examples/cu_anytime_rrt_star",
   "examples/cu_anytime_task",
+  "examples/cu_aur",
   "examples/cu_autoware",
   "examples/cu_background_task",
   "examples/cu_baremetal_safety",
