@@ -287,13 +287,51 @@ mod lanes {
     pub struct ResultSender<T>(Arc<ResultQueue<T>>);
     pub struct ResultReceiver<T>(Arc<ResultQueue<T>>);
 
-    pub fn result_channel<T>() -> (ResultSender<T>, ResultReceiver<T>) {
+    /// A queue for `capacity` results, one per CopperList in flight, so a
+    /// send never allocates.
+    pub fn result_channel<T>(capacity: usize) -> (ResultSender<T>, ResultReceiver<T>) {
         let queue = Arc::new(ResultQueue {
-            queue: Mutex::new(VecDeque::new()),
+            queue: Mutex::new(VecDeque::with_capacity(capacity.max(1))),
             condvar: Condvar::new(),
             senders: AtomicUsize::new(1),
         });
         (ResultSender(queue.clone()), ResultReceiver(queue))
+    }
+
+    /// Results parked until their CopperList is next to commit: one slot per
+    /// CopperList in flight, indexed by id, allocated once.
+    pub struct ReorderBuffer<T> {
+        slots: Vec<Option<(u64, T)>>,
+    }
+
+    impl<T> ReorderBuffer<T> {
+        pub fn new(capacity: usize) -> Self {
+            Self {
+                slots: (0..capacity.max(1)).map(|_| None).collect(),
+            }
+        }
+
+        fn slot(&mut self, clid: u64) -> &mut Option<(u64, T)> {
+            let len = self.slots.len() as u64;
+            &mut self.slots[(clid % len) as usize]
+        }
+
+        /// Parks the result of `clid`; its slot is free because no more
+        /// CopperLists than slots are ever between admission and commit.
+        pub fn insert(&mut self, clid: u64, value: T) {
+            let slot = self.slot(clid);
+            assert!(slot.is_none(), "reorder buffer slot of CopperList {clid} in use");
+            *slot = Some((clid, value));
+        }
+
+        /// Takes the result of `clid` if it has arrived.
+        pub fn remove(&mut self, clid: &u64) -> Option<T> {
+            let slot = self.slot(*clid);
+            match slot {
+                Some((id, _)) if *id == *clid => slot.take().map(|(_, value)| value),
+                _ => None,
+            }
+        }
     }
 
     impl<T> Clone for ResultSender<T> {
@@ -639,6 +677,23 @@ mod lanes {
         }
 
         #[test]
+        fn reorder_buffer_hands_results_back_in_id_order() {
+            let mut pending = ReorderBuffer::new(3);
+            pending.insert(2, "c");
+            pending.insert(1, "b");
+            assert_eq!(pending.remove(&0), None);
+            pending.insert(0, "a");
+            assert_eq!(pending.remove(&0), Some("a"));
+            assert_eq!(pending.remove(&1), Some("b"));
+            assert_eq!(pending.remove(&2), Some("c"));
+            assert_eq!(pending.remove(&2), None);
+            // The slot of id 3 is id 0's, free again.
+            pending.insert(3, "d");
+            assert_eq!(pending.remove(&0), None);
+            assert_eq!(pending.remove(&3), Some("d"));
+        }
+
+        #[test]
         fn shutdown_releases_waiters_and_aborts_are_per_slot() {
             let lanes = Arc::new(LaneExecutor::new(0, 1, 1, 1, 1));
             let waiter = {
@@ -663,7 +718,7 @@ mod lanes {
 }
 
 #[cfg(all(feature = "std", feature = "parallel-rt"))]
-pub use lanes::{LaneExecutor, ResultReceiver, ResultSender, result_channel};
+pub use lanes::{LaneExecutor, ReorderBuffer, ResultReceiver, ResultSender, result_channel};
 
 #[cfg(not(all(feature = "std", feature = "parallel-rt")))]
 mod imp {

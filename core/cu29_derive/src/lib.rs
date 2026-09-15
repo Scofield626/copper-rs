@@ -5170,7 +5170,7 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                         (0..max_in_flight).map(|_| None).collect();
                     let mut free_copperlists = free_copperlists;
                     let (done_tx, done_rx) =
-                        cu29::parallel_rt::result_channel::<#mission_mod::ParallelWorkerResult>();
+                        cu29::parallel_rt::result_channel::<#mission_mod::ParallelWorkerResult>(max_in_flight);
                     let mut lane_handles = Vec::new();
                     #(#lane_worker_spawns)*
                     drop(done_tx);
@@ -5188,8 +5188,12 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                     let mut stop_launching = false;
                     let mut next_launch_clid = start_clid;
                     let mut next_commit_clid = start_clid;
+                    // Every CopperList between admission and commit holds one of
+                    // the pool's boxes, so no more than the pool are pending.
                     let mut pending_results =
-                        std::collections::BTreeMap::<u64, #mission_mod::ParallelWorkerResult>::new();
+                        cu29::parallel_rt::ReorderBuffer::<#mission_mod::ParallelWorkerResult>::new(
+                            #copperlist_count_tokens,
+                        );
                     #parallel_active_keyframe
                     let mut fatal_error: Option<CuError> = None;
 
@@ -5426,8 +5430,12 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                     let mut stop_launching = false;
                     let mut next_launch_clid = start_clid;
                     let mut next_commit_clid = start_clid;
+                    // Every CopperList between admission and commit holds one of
+                    // the pool's boxes, so no more than the pool are pending.
                     let mut pending_results =
-                        std::collections::BTreeMap::<u64, #mission_mod::ParallelWorkerResult>::new();
+                        cu29::parallel_rt::ReorderBuffer::<#mission_mod::ParallelWorkerResult>::new(
+                            #copperlist_count_tokens,
+                        );
                     #parallel_active_keyframe
                     let mut fatal_error: Option<CuError> = None;
 

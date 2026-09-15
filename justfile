@@ -179,7 +179,8 @@ test:
 plan-check:
 	cargo test -p cu29-runtime --lib planner::
 	cargo test -p cu29-runtime --test fixed_plan --test stateless_task --test pgo_profile --test replay_anytime --bin cu29-plan
-	cargo test -p cu29-runtime --features parallel-rt,cu29/parallel-rt --lib parallel_rt:: --test lane_plan
+	cargo test -p cu29-runtime --features parallel-rt,cu29/parallel-rt --lib parallel_rt::
+	cargo test -p cu29-runtime --features parallel-rt,cu29/parallel-rt --test lane_plan
 	cargo test -p cu29-derive --lib
 	cargo test -p cu29-export --lib logstats::
 	cargo test -p cu29-runtime --doc planner::
