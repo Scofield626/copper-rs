@@ -1896,6 +1896,8 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
     let config_file = runtime_args.config_path.clone();
+    // Named in the output so Cargo recompiles when the config changes.
+    let config_dependency = config_full_path(&config_file);
     let sim_mode = runtime_args.sim_mode;
     let ignore_resources = runtime_args.ignore_resources;
 
@@ -5830,6 +5832,7 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
 
         let prepare_config_fn = quote! {
             #prepare_config_sig {
+                const _: &[u8] = include_bytes!(#config_dependency);
                 let config_filename = #config_file;
 
                 #[cfg(target_os = "none")]
