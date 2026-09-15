@@ -299,7 +299,7 @@ mod lanes {
     }
 
     /// Results parked until their CopperList is next to commit: one slot per
-    /// CopperList in flight, indexed by id, allocated once.
+    /// CopperList the pool can hold, indexed by id, allocated once.
     pub struct ReorderBuffer<T> {
         slots: Vec<Option<(u64, T)>>,
     }

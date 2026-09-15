@@ -5118,6 +5118,7 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                 occurrences_per_copperlist: lane_occurrences_per_cl_lit,
                 copperlists_per_cycle: lane_k_lit,
                 max_in_flight: lane_max_in_flight_lit,
+                workers: lane_workers_lit,
             } = lane;
             quote! {
                 #kill_handler
@@ -5169,8 +5170,12 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                     let mut in_flight_boxes: Vec<Option<Box<CuList>>> =
                         (0..max_in_flight).map(|_| None).collect();
                     let mut free_copperlists = free_copperlists;
+                    // One result per CopperList in flight, and one more per
+                    // worker that fails.
                     let (done_tx, done_rx) =
-                        cu29::parallel_rt::result_channel::<#mission_mod::ParallelWorkerResult>(max_in_flight);
+                        cu29::parallel_rt::result_channel::<#mission_mod::ParallelWorkerResult>(
+                            max_in_flight + #lane_workers_lit,
+                        );
                     let mut lane_handles = Vec::new();
                     #(#lane_worker_spawns)*
                     drop(done_tx);
@@ -12091,6 +12096,7 @@ struct LaneExecutorTokens {
     occurrences_per_copperlist: proc_macro2::Literal,
     copperlists_per_cycle: proc_macro2::Literal,
     max_in_flight: proc_macro2::Literal,
+    workers: proc_macro2::Literal,
 }
 
 fn scheduling_policy_tokens(policy: SchedulingPolicy) -> proc_macro2::TokenStream {
@@ -12408,6 +12414,7 @@ fn build_lane_executor_tokens(
         occurrences_per_copperlist: proc_macro2::Literal::u32_unsuffixed(next_stage as u32),
         copperlists_per_cycle: proc_macro2::Literal::u64_unsuffixed(k),
         max_in_flight: proc_macro2::Literal::usize_unsuffixed(lane_plan.max_in_flight as usize),
+        workers: proc_macro2::Literal::usize_unsuffixed(lane_plan.workers.len()),
     })
 }
 
