@@ -1,6 +1,12 @@
 //! Candidate plans from a profile and a contract: the response-time model
 //! with the worker as its unit, the contract's objective, and a local search
 //! over which worker runs each occurrence and in which order.
+//!
+//! Workers form a pipeline: no zero-lag edge leads from a later worker back
+//! to an earlier one, so a worker may run ahead of the others up to
+//! `max_in_flight` instead of every worker finishing a CopperList before any
+//! starts the next. Under a real-time policy each CPU gets a second worker
+//! one priority above the base one, for the chains with short deadlines.
 
 use super::CuContract;
 use super::CuMissionPlan;
@@ -11,6 +17,7 @@ use super::CuPlanThread;
 use super::CuPlanWorker;
 use super::CuProfile;
 use crate::config::CuConfig;
+use crate::config::MAX_RT_PRIORITY;
 use crate::config::SchedulingPolicy;
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
@@ -140,8 +147,9 @@ struct Model {
 /// The miss rate a chain over its deadline at each cost tail stands for.
 const TAIL_MISS_RATE: [f64; 3] = [0.05, 0.01, 0.001];
 
-/// A candidate under search: each worker is one CPU with an ordered list of
-/// occurrences.
+/// A candidate under search: an ordered list of occurrences per worker. Lane
+/// `l` runs on CPU `l % cpus` at tier `l / cpus`; tier 1 is the
+/// higher-priority worker of that CPU.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct Assignment {
     lanes: Vec<Vec<usize>>,
@@ -359,8 +367,61 @@ impl Model {
         })
     }
 
+    /// Workers per CPU: a second one a priority above the base worker under
+    /// a real-time policy.
+    fn tiers(&self) -> usize {
+        match self.policy {
+            SchedulingPolicy::Fifo { priority } | SchedulingPolicy::RoundRobin { priority }
+                if priority < MAX_RT_PRIORITY =>
+            {
+                2
+            }
+            _ => 1,
+        }
+    }
+
+    fn lane_cpu(&self, lane: usize) -> usize {
+        self.cpus[lane % self.cpus.len()]
+    }
+
+    fn lane_tier(&self, lane: usize) -> usize {
+        lane / self.cpus.len()
+    }
+
+    fn worker_id(&self, lane: usize) -> String {
+        let cpu = self.lane_cpu(lane);
+        if self.lane_tier(lane) == 0 {
+            format!("cpu{cpu}")
+        } else {
+            format!("cpu{cpu}-hi")
+        }
+    }
+
+    fn worker_policy(&self, lane: usize) -> SchedulingPolicy {
+        match self.policy {
+            SchedulingPolicy::Fifo { priority } if self.lane_tier(lane) > 0 => {
+                SchedulingPolicy::Fifo { priority: priority + 1 }
+            }
+            SchedulingPolicy::RoundRobin { priority } if self.lane_tier(lane) > 0 => {
+                SchedulingPolicy::RoundRobin { priority: priority + 1 }
+            }
+            policy => policy,
+        }
+    }
+
+    /// Window load of the higher-tier lanes on `lane`'s CPU.
+    fn higher_load(&self, lane: usize, window_load: &[u64]) -> u64 {
+        let cpus = self.cpus.len();
+        (0..window_load.len())
+            .filter(|&h| h % cpus == lane % cpus && h / cpus > lane / cpus)
+            .map(|h| window_load[h])
+            .sum()
+    }
+
     /// Whether a lane order respects every zero-lag edge among its own
-    /// occurrences and the whole cycle graph stays acyclic.
+    /// occurrences, the whole cycle graph stays acyclic, and the lanes form
+    /// a pipeline: an edge from a later lane back to an earlier one would
+    /// hold both to one CopperList at a time.
     fn is_valid(&self, assignment: &Assignment) -> bool {
         let n = self.units.len();
         let mut incoming = vec![0usize; n];
@@ -377,18 +438,28 @@ impl Model {
                 incoming[pair[1]] += 1;
             }
         }
-        let mut ready: VecDeque<usize> = (0..n).filter(|&i| incoming[i] == 0).collect();
-        let mut seen = 0;
-        while let Some(node) = ready.pop_front() {
-            seen += 1;
-            for &next in &succs[node] {
-                incoming[next] -= 1;
-                if incoming[next] == 0 {
-                    ready.push_back(next);
+        if kahn_count(&succs, incoming) != n {
+            return false;
+        }
+        let lanes = assignment.lanes.len();
+        let mut lane_of = vec![usize::MAX; n];
+        for (l, lane) in assignment.lanes.iter().enumerate() {
+            for &o in lane {
+                lane_of[o] = l;
+            }
+        }
+        let mut lane_succs: Vec<Vec<usize>> = vec![Vec::new(); lanes];
+        let mut lane_incoming = vec![0usize; lanes];
+        for (to, preds) in self.preds.iter().enumerate() {
+            for &from in preds {
+                let (a, b) = (lane_of[from], lane_of[to]);
+                if a != b && !lane_succs[a].contains(&b) {
+                    lane_succs[a].push(b);
+                    lane_incoming[b] += 1;
                 }
             }
         }
-        seen == n
+        kahn_count(&lane_succs, lane_incoming) == lanes
     }
 
     /// Response-time analysis per worker, then the cycle's timeline composed
@@ -401,35 +472,49 @@ impl Model {
             .iter()
             .map(|lane| lane.iter().map(|&o| self.cost[o]).sum())
             .collect();
-        // One worker per CPU in this search: no higher-priority lanes share a
-        // CPU, so the response is the lane's own cost plus dispatch slack.
+        // In steady state a pipeline lane is bound by its own work over the
+        // window plus that of the higher-priority lanes on its CPU, which
+        // preempt it; a lane over the window delivers that fraction of it.
+        let window_ns = period * self.window_cost.len() as u64;
+        let window_load: Vec<u64> = lanes
+            .iter()
+            .map(|lane| {
+                lane.iter()
+                    .map(|&o| self.window_cost.iter().map(|cycle| cycle[o]).sum::<u64>())
+                    .sum()
+            })
+            .collect();
         let mut response = Vec::with_capacity(lanes.len());
         let mut rate = Vec::with_capacity(lanes.len());
         let mut load = Vec::with_capacity(lanes.len());
-        for &cost in &lane_cost {
+        let mut inflate = Vec::with_capacity(lanes.len());
+        for (l, &cost) in lane_cost.iter().enumerate() {
             let r = fixpoint(cost, &[], g, RESPONSE_CAP_PERIODS * period);
             response.push(r);
-            rate.push(match r {
-                Some(r) if r <= period => 1.0,
-                Some(r) => period as f64 / (r + g / 2) as f64,
-                None => 0.0,
+            let higher = self.higher_load(l, &window_load);
+            let busy = window_load[l] + higher;
+            let steady = (window_ns as f64 / busy.max(1) as f64).min(1.0);
+            rate.push(
+                match r {
+                    Some(r) if r <= period => 1.0,
+                    Some(r) => period as f64 / (r + g / 2) as f64,
+                    None => 0.0,
+                }
+                .min(steady),
+            );
+            load.push(busy as f64 / window_ns as f64);
+            // The typical stretch of a segment under preemption, as in the
+            // paper: divided by the share the higher lanes leave.
+            inflate.push(if higher < window_ns {
+                (window_ns as f64 / (window_ns - higher) as f64).min(RESPONSE_CAP_PERIODS as f64)
+            } else {
+                RESPONSE_CAP_PERIODS as f64
             });
-            load.push(cost as f64 / period as f64);
         }
         // Chains are timed in a cycle where everything fires: a long chain's
         // latency is paid in the cycles it runs, not on average.
-        let (starts, ends) = self.timeline(lanes, &self.fired_cost)?;
-        let (_, expected_ends) = self.timeline(lanes, &self.cost)?;
-        // A lane runs its cycles in order and is occupied until its last
-        // step of a cycle ends, waits included; over the window each cycle is
-        // released on the grid. A lane still busy past the window's end
-        // delivers that fraction of it.
-        let window_ns = period * self.window_cost.len() as u64;
-        for (l, last_end) in self.window_timeline(lanes).into_iter().enumerate() {
-            if last_end > window_ns {
-                rate[l] = rate[l].min(window_ns as f64 / last_end as f64);
-            }
-        }
+        let (starts, ends) = self.timeline(lanes, &self.fired_cost, &inflate)?;
+        let (_, expected_ends) = self.timeline(lanes, &self.cost, &inflate)?;
         let mut chain_ratio = Vec::with_capacity(self.chains.len());
         for (chain, pairs) in self.chains.iter().enumerate() {
             let deadline = u64::from(self.contract_deadline(chain)) * 1_000_000;
@@ -482,7 +567,7 @@ impl Model {
                     .map(|&r| if r > 1.0 { 0.5 } else { 0.0 })
                     .collect();
                 for (tail, &share) in self.tail_cost.iter().zip(&TAIL_MISS_RATE) {
-                    let (tail_starts, tail_ends) = self.timeline(lanes, tail)?;
+                    let (tail_starts, tail_ends) = self.timeline(lanes, tail, &inflate)?;
                     for (chain, pairs) in self.chains.iter().enumerate() {
                         let deadline = u64::from(self.contract_deadline(chain)) * 1_000_000;
                         let late = pairs.iter().any(|&(source, sink)| {
@@ -517,8 +602,14 @@ impl Model {
     }
 
     /// Each lane runs its units in order; a unit starts when its lane is free
-    /// and every predecessor has ended.
-    fn timeline(&self, lanes: &[Vec<usize>], cost: &[u64]) -> Option<(Vec<u64>, Vec<u64>)> {
+    /// and every predecessor has ended, and takes its cost stretched by the
+    /// lane's `inflate` factor.
+    fn timeline(
+        &self,
+        lanes: &[Vec<usize>],
+        cost: &[u64],
+        inflate: &[f64],
+    ) -> Option<(Vec<u64>, Vec<u64>)> {
         let n = self.units.len();
         let mut starts = vec![0u64; n];
         let mut ends = vec![0u64; n];
@@ -538,7 +629,7 @@ impl Model {
                 let release = self.preds[o].iter().map(|&p| ends[p]).max().unwrap_or(0);
                 let start = lane_free[l].max(release);
                 starts[o] = start;
-                ends[o] = start + cost[o];
+                ends[o] = start + (cost[o] as f64 * inflate[l]) as u64;
                 lane_free[l] = ends[o];
                 done[o] = true;
                 remaining -= 1;
@@ -548,42 +639,6 @@ impl Model {
         (remaining == 0).then_some((starts, ends))
     }
 
-    /// Each lane's last end over the window: cycles released on the grid,
-    /// lanes in order across cycles, a unit waiting for its zero-lag
-    /// predecessors of the same cycle.
-    fn window_timeline(&self, lanes: &[Vec<usize>]) -> Vec<u64> {
-        let n = self.units.len();
-        let cycles = self.window_cost.len();
-        let mut ends = vec![0u64; n * cycles];
-        let mut done = vec![false; n * cycles];
-        let mut lane_free = vec![0u64; lanes.len()];
-        let mut position = vec![0usize; lanes.len()];
-        let mut progressed = true;
-        while progressed {
-            progressed = false;
-            for (l, lane) in lanes.iter().enumerate() {
-                while position[l] < lane.len() * cycles {
-                    let (cycle, o) = (position[l] / lane.len(), lane[position[l] % lane.len()]);
-                    let at = |unit: usize| cycle * n + unit;
-                    if self.preds[o].iter().any(|&p| !done[at(p)]) {
-                        break;
-                    }
-                    let release = self.preds[o]
-                        .iter()
-                        .map(|&p| ends[at(p)])
-                        .fold(cycle as u64 * self.cycle_ns, u64::max);
-                    let start = lane_free[l].max(release);
-                    ends[at(o)] = start + self.window_cost[cycle][o];
-                    lane_free[l] = ends[at(o)];
-                    done[at(o)] = true;
-                    position[l] += 1;
-                    progressed = true;
-                }
-            }
-        }
-        lane_free
-    }
-
     fn contract_deadline(&self, chain: usize) -> u32 {
         self.chain_deadlines[chain]
     }
@@ -591,6 +646,23 @@ impl Model {
 
 fn round6(value: f64) -> f64 {
     (value * 1e6 + 0.5) as u64 as f64 / 1e6
+}
+
+/// How many nodes a topological walk over `succs` reaches; fewer than all
+/// means a cycle.
+fn kahn_count(succs: &[Vec<usize>], mut incoming: Vec<usize>) -> usize {
+    let mut ready: VecDeque<usize> = (0..succs.len()).filter(|&i| incoming[i] == 0).collect();
+    let mut seen = 0;
+    while let Some(node) = ready.pop_front() {
+        seen += 1;
+        for &next in &succs[node] {
+            incoming[next] -= 1;
+            if incoming[next] == 0 {
+                ready.push_back(next);
+            }
+        }
+    }
+    seen
 }
 
 /// Smallest `x = c + sum ceil((x + g) / T) C` over `hp`; `None` past `cap`.
@@ -678,10 +750,14 @@ impl Rng {
 }
 
 impl Model {
-    /// The start: occurrences in a topological order of the inventory, each
-    /// placed on the least loaded CPU.
+    /// The start: a pipeline. Units in earliest-start order with each
+    /// connected component contiguous; a component whose chains have a
+    /// deadline under the window goes whole to a higher-tier lane, the rest
+    /// are cut into one stage per CPU by load, tightest deadline first.
     fn start_plan(&self) -> Assignment {
         let n = self.units.len();
+        let cpus = self.cpus.len();
+        let tiers = self.tiers();
         let mut incoming = vec![0usize; n];
         let mut succs: Vec<Vec<usize>> = vec![Vec::new(); n];
         for (to, preds) in self.preds.iter().enumerate() {
@@ -691,20 +767,95 @@ impl Model {
             }
         }
         let mut ready: VecDeque<usize> = (0..n).filter(|&i| incoming[i] == 0).collect();
-        let mut lanes = vec![Vec::new(); self.cpus.len()];
-        let mut load = vec![0u64; self.cpus.len()];
+        let mut order = Vec::with_capacity(n);
         while let Some(o) = ready.pop_front() {
-            let lane = (0..lanes.len())
-                .min_by_key(|&l| (load[l], l))
-                .expect("at least one CPU");
-            lanes[lane].push(o);
-            load[lane] += self.cost[o];
+            order.push(o);
             for &next in &succs[o] {
                 incoming[next] -= 1;
                 if incoming[next] == 0 {
                     ready.push_back(next);
                 }
             }
+        }
+        let mut asap = vec![0u64; n];
+        let mut position = vec![0usize; n];
+        for (i, &o) in order.iter().enumerate() {
+            position[o] = i;
+            asap[o] = self.preds[o]
+                .iter()
+                .map(|&p| asap[p] + self.cost[p])
+                .max()
+                .unwrap_or(0);
+        }
+        let mut component = vec![usize::MAX; n];
+        let mut count = 0;
+        for start in 0..n {
+            if component[start] != usize::MAX {
+                continue;
+            }
+            let mut stack = vec![start];
+            component[start] = count;
+            while let Some(u) = stack.pop() {
+                for &v in self.preds[u].iter().chain(&succs[u]) {
+                    if component[v] == usize::MAX {
+                        component[v] = count;
+                        stack.push(v);
+                    }
+                }
+            }
+            count += 1;
+        }
+        let unit_load = |o: usize| self.window_cost.iter().map(|cycle| cycle[o]).sum::<u64>();
+        let mut members: Vec<Vec<usize>> = vec![Vec::new(); count];
+        let mut deadline = vec![u64::MAX; count];
+        for o in 0..n {
+            members[component[o]].push(o);
+        }
+        for (chain, pairs) in self.chains.iter().enumerate() {
+            for &(_, sink) in pairs {
+                let c = &mut deadline[component[sink]];
+                *c = (*c).min(u64::from(self.chain_deadlines[chain]) * 1_000_000);
+            }
+        }
+        let window_ns = self.cycle_ns * self.window_cost.len() as u64;
+        let mut components: Vec<usize> = (0..count).collect();
+        for c in &components {
+            members[*c].sort_by_key(|&o| (asap[o], position[o]));
+        }
+        let comp_load: Vec<u64> = members
+            .iter()
+            .map(|units| units.iter().map(|&o| unit_load(o)).sum())
+            .collect();
+        components.sort_by_key(|&c| (deadline[c], core::cmp::Reverse(comp_load[c]), c));
+        let mut lanes = vec![Vec::new(); cpus * tiers];
+        let mut lane_load = vec![0u64; cpus * tiers];
+        let mut low = Vec::new();
+        for &c in &components {
+            if tiers > 1 && deadline[c] < window_ns {
+                let lane = cpus
+                    + (0..cpus)
+                        .min_by_key(|&i| (lane_load[cpus + i], i))
+                        .expect("at least one CPU");
+                lanes[lane].extend(&members[c]);
+                lane_load[lane] += comp_load[c];
+            } else {
+                low.extend(&members[c]);
+            }
+        }
+        let total: u64 = lane_load.iter().sum::<u64>() + low.iter().map(|&o| unit_load(o)).sum::<u64>();
+        let share = total / cpus as u64;
+        let capacity = |stage: usize| {
+            share.saturating_sub(if tiers > 1 { lane_load[cpus + stage] } else { 0 })
+        };
+        let (mut stage, mut acc, mut boundary) = (0, 0u64, capacity(0));
+        for o in low {
+            let w = unit_load(o);
+            if stage + 1 < cpus && acc + w / 2 > boundary {
+                stage += 1;
+                boundary += capacity(stage);
+            }
+            lanes[stage].push(o);
+            acc += w;
         }
         Assignment { lanes }
     }
@@ -844,10 +995,10 @@ impl Model {
             .enumerate()
             .filter(|(_, lane)| !lane.is_empty())
             .map(|(l, lane)| CuPlanWorker {
-                id: format!("cpu{}", self.cpus[l]),
+                id: self.worker_id(l),
                 placement: CuPlanPlacement::Thread {
-                    cpu: Some(self.cpus[l]),
-                    policy: self.policy,
+                    cpu: Some(self.lane_cpu(l)),
+                    policy: self.worker_policy(l),
                 },
                 steps: lane
                     .iter()
@@ -895,9 +1046,9 @@ impl Model {
             .filter(|(_, lane)| !lane.is_empty())
             .map(|(l, _)| {
                 (
-                    format!("cpu{}", self.cpus[l]),
+                    self.worker_id(l),
                     CuWorkerPrediction {
-                        cpu: self.cpus[l],
+                        cpu: self.lane_cpu(l),
                         load: evaluation.load[l],
                         response_ns: evaluation.response[l],
                         rate: evaluation.rate[l],
@@ -1217,6 +1368,45 @@ mod tests {
                 .unwrap();
             let at = |step| worker.steps.iter().position(|&s| s == step).unwrap();
             assert_eq!((at(one), at(two)), (at(base) + 1, at(base) + 2));
+        }
+        assert_eq!(candidates[0].prediction.chains["hot"].latency_ns, 3_200_000);
+    }
+
+    #[test]
+    fn fifo_workers_come_in_two_tiers_and_lanes_form_a_pipeline() {
+        let config = config();
+        let profile = profile();
+        let mut contract = contract(vec![0, 1]);
+        contract.worker_policy = SchedulingPolicy::Fifo { priority: 60 };
+        let candidates = propose(&request(&config, &contract, &profile, 1)).unwrap();
+        for candidate in &candidates {
+            let mission = &candidate.plan.missions["default"];
+            let mut lane_of = BTreeMap::new();
+            for (l, worker) in mission.workers.iter().enumerate() {
+                let priority = match worker.placement {
+                    CuPlanPlacement::Thread {
+                        policy: SchedulingPolicy::Fifo { priority },
+                        ..
+                    } => priority,
+                    _ => panic!("{}: not a FIFO thread", worker.id),
+                };
+                assert_eq!(priority, if worker.id.ends_with("-hi") { 61 } else { 60 });
+                for &step in &worker.steps {
+                    lane_of.insert(step, l);
+                }
+            }
+            let edges: BTreeSet<(usize, usize)> = mission
+                .dependencies
+                .iter()
+                .filter(|edge| edge.cycle_lag == 0)
+                .map(|edge| (lane_of[&edge.from], lane_of[&edge.to]))
+                .filter(|(a, b)| a != b)
+                .collect();
+            assert!(
+                edges.iter().all(|&(a, b)| !edges.contains(&(b, a))),
+                "{}: lanes wait on each other: {edges:?}",
+                candidate.prediction.score.len()
+            );
         }
         assert_eq!(candidates[0].prediction.chains["hot"].latency_ns, 3_200_000);
     }

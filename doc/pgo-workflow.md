@@ -314,16 +314,26 @@ the candidates after measurement.
 
 **Search.** `cu29-plan <config> --propose pgo.ron --profile profile.ron --cycle k` starts
 from the exported `k`-CopperList inventory (every required edge present, so any
-acyclic placement is valid) placed by a list schedule on `cpus`, one worker per CPU with
-the contract's `worker_policy`. The search unit is one occurrence, or an anytime base
+acyclic placement is valid). Workers form a pipeline: no zero-lag edge may lead from a
+later worker back to an earlier one, because two workers waiting on each other inside a
+CopperList finish every CopperList together and never run ahead, whatever `max_in_flight`
+allows. Measured on the Autoware replica at four cores, such plans kept two CopperLists in
+flight of forty and idled 36–45% of every lane. Under a real-time `worker_policy` each CPU
+gets two workers, the base one and one a priority above it, so short chains preempt long
+stages; a plan's rate is then each lane's work over the window plus that of the
+higher-priority lanes on its CPU, and a chain segment on a lower lane is stretched by the
+share those lanes take. The start is one stage per CPU cut by load from the earliest-start
+order, connected components kept contiguous and those with a deadline under the window
+placed whole on the higher worker. The search unit is one occurrence, or an anytime base
 occurrence with its refinements, which the executor runs together on one worker. The
 profile must carry the config's graph signature. Moves: move an occurrence to another worker and position;
-swap two neighbours on a worker. A move that closes a cycle with the required edges is
-rejected before scoring. Seeded, fixed budget, restarts; the best `N` plans with distinct
-scores are written as `plan-<n>.ron` with `predictions.ron`, each raising
-`logging.copperlist_count` to its `max_in_flight` on import. With `k = 2` a stateless
-task's two occurrences may land on different workers. Worker priorities on a shared CPU
-and `max_in_flight` moves are not searched yet. The proposer never claims optimality; the
+swap two neighbours on a worker. A move that closes a cycle with the required edges, or
+between workers, is rejected before scoring. Seeded, fixed budget, restarts; the best `N`
+plans with distinct scores are written as `plan-<n>.ron` with `predictions.ron`, each
+raising `logging.copperlist_count` to its `max_in_flight` on import. With `k = 2` a
+stateless task's two occurrences may land on different workers. `max_in_flight` comes
+from the contract and must cover the pipeline's depth (a chain's latency over the
+CopperList period); it is not searched. The proposer never claims optimality; the
 measurement step decides.
 
 ## 7. Measuring and selecting
