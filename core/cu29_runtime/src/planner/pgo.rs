@@ -76,7 +76,7 @@ pub struct CuObjective {
     #[serde(default)]
     pub kind: CuObjectiveKind,
     /// A chain counts as tight while its latency exceeds `(1 - margin)` of
-    /// its deadline.
+    /// its deadline, and a worker as full past `(1 - margin)` of the window.
     #[serde(default = "default_margin")]
     pub margin: f64,
 }

@@ -329,9 +329,11 @@ window over its cycle time in the second window, waits included, and a chain acr
 pays the cycles one lane runs behind the other. A worker counts as full past `(1 −
 margin)` of the window, the room the costs' tails need. The start is connected components
 in deadline order, each in earliest-start order, cut into one stage per CPU by load; a
-component of short-deadline work goes whole to the least loaded higher worker. The search unit is one occurrence, or an anytime base
+component of short-deadline work goes whole to the least loaded higher worker; a component
+that mixes short and long work stays on the base workers, and the search never changes a
+unit's tier. The search unit is one occurrence, or an anytime base
 occurrence with its refinements, which the executor runs together on one worker. The
-profile must carry the config's graph signature. Moves: move an occurrence to another worker and position;
+profile must carry the config's graph signature. Moves: move an occurrence to another worker of its tier and position;
 swap two neighbours on a worker. A move that closes a cycle with the required edges, or
 between workers, is rejected before scoring. Seeded, fixed budget, restarts; the best `N`
 plans with distinct scores are written as `plan-<n>.ron` with `predictions.ron`, each
