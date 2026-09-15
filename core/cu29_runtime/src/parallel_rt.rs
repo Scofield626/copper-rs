@@ -266,11 +266,103 @@ mod imp {
 #[cfg(all(feature = "std", feature = "parallel-rt"))]
 mod lanes {
     use super::CachePadded;
-    use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
+    use alloc::collections::VecDeque;
+    use alloc::sync::Arc;
+    use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Condvar, Mutex};
 
     /// Spins this many times on a condition before parking on the condvar.
     const SPIN_ROUNDS: u32 = 256;
+
+    /// The lanes' results to the dispatcher. `std::sync::mpsc` spins with
+    /// `sched_yield` on a slot a preempted sender has not finished writing,
+    /// which never runs a lower-priority sender on the receiver's CPU; this
+    /// queue blocks on a mutex and a condvar instead.
+    struct ResultQueue<T> {
+        queue: Mutex<VecDeque<T>>,
+        condvar: Condvar,
+        senders: AtomicUsize,
+    }
+
+    pub struct ResultSender<T>(Arc<ResultQueue<T>>);
+    pub struct ResultReceiver<T>(Arc<ResultQueue<T>>);
+
+    pub fn result_channel<T>() -> (ResultSender<T>, ResultReceiver<T>) {
+        let queue = Arc::new(ResultQueue {
+            queue: Mutex::new(VecDeque::new()),
+            condvar: Condvar::new(),
+            senders: AtomicUsize::new(1),
+        });
+        (ResultSender(queue.clone()), ResultReceiver(queue))
+    }
+
+    impl<T> Clone for ResultSender<T> {
+        fn clone(&self) -> Self {
+            self.0.senders.fetch_add(1, Ordering::AcqRel);
+            Self(self.0.clone())
+        }
+    }
+
+    impl<T> Drop for ResultSender<T> {
+        fn drop(&mut self) {
+            self.0.senders.fetch_sub(1, Ordering::AcqRel);
+            let _guard = self.0.queue.lock().expect("result queue poisoned");
+            self.0.condvar.notify_all();
+        }
+    }
+
+    impl<T> ResultSender<T> {
+        pub fn send(&self, value: T) -> Result<(), T> {
+            self.0
+                .queue
+                .lock()
+                .expect("result queue poisoned")
+                .push_back(value);
+            self.0.condvar.notify_one();
+            Ok(())
+        }
+    }
+
+    impl<T> ResultReceiver<T> {
+        pub fn recv(&self) -> Result<T, std::sync::mpsc::RecvError> {
+            let mut queue = self.0.queue.lock().expect("result queue poisoned");
+            loop {
+                if let Some(value) = queue.pop_front() {
+                    return Ok(value);
+                }
+                if self.0.senders.load(Ordering::Acquire) == 0 {
+                    return Err(std::sync::mpsc::RecvError);
+                }
+                queue = self.0.condvar.wait(queue).expect("result queue poisoned");
+            }
+        }
+
+        pub fn recv_timeout(
+            &self,
+            timeout: std::time::Duration,
+        ) -> Result<T, std::sync::mpsc::RecvTimeoutError> {
+            let deadline = std::time::Instant::now() + timeout;
+            let mut queue = self.0.queue.lock().expect("result queue poisoned");
+            loop {
+                if let Some(value) = queue.pop_front() {
+                    return Ok(value);
+                }
+                if self.0.senders.load(Ordering::Acquire) == 0 {
+                    return Err(std::sync::mpsc::RecvTimeoutError::Disconnected);
+                }
+                let now = std::time::Instant::now();
+                if now >= deadline {
+                    return Err(std::sync::mpsc::RecvTimeoutError::Timeout);
+                }
+                queue = self
+                    .0
+                    .condvar
+                    .wait_timeout(queue, deadline - now)
+                    .expect("result queue poisoned")
+                    .0;
+            }
+        }
+    }
 
     struct LaneSlot {
         culist: AtomicPtr<u8>,
@@ -571,7 +663,7 @@ mod lanes {
 }
 
 #[cfg(all(feature = "std", feature = "parallel-rt"))]
-pub use lanes::LaneExecutor;
+pub use lanes::{LaneExecutor, ResultReceiver, ResultSender, result_channel};
 
 #[cfg(not(all(feature = "std", feature = "parallel-rt")))]
 mod imp {

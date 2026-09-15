@@ -5170,7 +5170,7 @@ pub fn copper_runtime(args: TokenStream, input: TokenStream) -> TokenStream {
                         (0..max_in_flight).map(|_| None).collect();
                     let mut free_copperlists = free_copperlists;
                     let (done_tx, done_rx) =
-                        std::sync::mpsc::channel::<#mission_mod::ParallelWorkerResult>();
+                        cu29::parallel_rt::result_channel::<#mission_mod::ParallelWorkerResult>();
                     let mut lane_handles = Vec::new();
                     #(#lane_worker_spawns)*
                     drop(done_tx);
