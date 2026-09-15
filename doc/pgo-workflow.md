@@ -320,14 +320,16 @@ CopperList finish every CopperList together and never run ahead, whatever `max_i
 allows. Measured on the Autoware replica at four cores, such plans kept two CopperLists in
 flight of forty and idled 36–45% of every lane. Under a real-time `worker_policy` each CPU
 gets two workers, the base one and one a priority above it; the higher one may only hold
-units on chains due within their source's period, which is what it preempts for. A chain
-segment on a base worker is stretched by the share its CPU's higher worker takes. Rates
-and chain latencies come from a two-window timeline of the lanes in steady state, cycles
-released on the grid and held by the ring: a lane's rate is the window over its cycle
-time in the second window, waits included, and a chain across lanes pays the cycles one
-lane runs behind the other. The start is connected components in deadline order, each in
-earliest-start order, cut into one stage per CPU by load; a component of short-deadline
-work that fits a CPU's share goes whole to that CPU's higher worker. The search unit is one occurrence, or an anytime base
+units on chains due within their source's period, which is what it preempts for, and such
+a chain stays whole within one tier, because the base workers run whole cycles behind the
+higher ones. A chain segment on a base worker is stretched by the share its CPU's higher
+worker takes. Rates and chain latencies come from a two-window timeline of the lanes in
+steady state, cycles released on the grid and held by the ring: a lane's rate is the
+window over its cycle time in the second window, waits included, and a chain across lanes
+pays the cycles one lane runs behind the other. A worker counts as full past `(1 −
+margin)` of the window, the room the costs' tails need. The start is connected components
+in deadline order, each in earliest-start order, cut into one stage per CPU by load; a
+component of short-deadline work goes whole to the least loaded higher worker. The search unit is one occurrence, or an anytime base
 occurrence with its refinements, which the executor runs together on one worker. The
 profile must carry the config's graph signature. Moves: move an occurrence to another worker and position;
 swap two neighbours on a worker. A move that closes a cycle with the required edges, or

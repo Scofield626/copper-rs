@@ -137,6 +137,8 @@ struct Model {
     /// Per unit: it lies on a chain whose deadline is within its source's
     /// period, so it may run on a higher-tier worker.
     short: Vec<bool>,
+    /// The units on each such chain's paths; a chain stays within one tier.
+    short_paths: Vec<Vec<usize>>,
     /// Per window cycle and unit: whether the unit fires there (always,
     /// without a firing pattern).
     fires: Vec<Vec<bool>>,
@@ -366,6 +368,7 @@ impl Model {
             }
         }
         let mut short = vec![false; units.len()];
+        let mut short_paths = Vec::new();
         for (chain, pairs) in chains.iter().enumerate() {
             let spec = &contract.chains[chain];
             let period = contract
@@ -376,9 +379,12 @@ impl Model {
             if period.is_some_and(|period| spec.deadline_ms <= period) {
                 for &(source, sink) in pairs {
                     let (forward, backward) = (reachable(&succs, source), reachable(&preds, sink));
-                    for unit in 0..units.len() {
-                        short[unit] |= forward[unit] && backward[unit];
+                    let path: Vec<usize> =
+                        (0..units.len()).filter(|&u| forward[u] && backward[u]).collect();
+                    for &unit in &path {
+                        short[unit] = true;
                     }
+                    short_paths.push(path);
                 }
             }
         }
@@ -399,6 +405,7 @@ impl Model {
                 .collect(),
             sources,
             short,
+            short_paths,
             fires,
             cpus: contract.cpus.clone(),
             max_in_flight: contract.max_in_flight.max(copperlists_per_cycle),
@@ -463,14 +470,32 @@ impl Model {
     /// Whether a lane order respects every zero-lag edge among its own
     /// occurrences, the whole cycle graph stays acyclic, the lanes form a
     /// pipeline (an edge from a later lane back to an earlier one would hold
-    /// both to one CopperList at a time), and higher-tier lanes carry only
-    /// short-deadline work, which is what they preempt for.
+    /// both to one CopperList at a time), higher-tier lanes carry only
+    /// short-deadline work, which is what they preempt for, and a
+    /// short-deadline chain stays within one tier, since the lower tier runs
+    /// whole cycles behind the higher one.
     fn is_valid(&self, assignment: &Assignment) -> bool {
         let n = self.units.len();
-        if assignment.lanes.iter().enumerate().any(|(l, lane)| {
-            self.lane_tier(l) > 0 && lane.iter().any(|&o| !self.short[o])
-        }) {
+        let lanes = assignment.lanes.len();
+        let mut lane_of = vec![usize::MAX; n];
+        for (l, lane) in assignment.lanes.iter().enumerate() {
+            for &o in lane {
+                lane_of[o] = l;
+            }
+        }
+        if lane_of.contains(&usize::MAX) {
             return false;
+        }
+        if self.tiers() > 1 {
+            if (0..n).any(|o| self.lane_tier(lane_of[o]) > 0 && !self.short[o]) {
+                return false;
+            }
+            if self.short_paths.iter().any(|path| {
+                path.iter()
+                    .any(|&o| self.lane_tier(lane_of[o]) != self.lane_tier(lane_of[path[0]]))
+            }) {
+                return false;
+            }
         }
         let mut incoming = vec![0usize; n];
         let mut succs: Vec<Vec<usize>> = vec![Vec::new(); n];
@@ -487,16 +512,6 @@ impl Model {
             }
         }
         if kahn_count(&succs, incoming) != n {
-            return false;
-        }
-        let lanes = assignment.lanes.len();
-        let mut lane_of = vec![usize::MAX; n];
-        for (l, lane) in assignment.lanes.iter().enumerate() {
-            for &o in lane {
-                lane_of[o] = l;
-            }
-        }
-        if lane_of.contains(&usize::MAX) {
             return false;
         }
         let mut lane_succs: Vec<Vec<usize>> = vec![Vec::new(); lanes];
@@ -542,12 +557,20 @@ impl Model {
             let r = fixpoint(cost, &[], g, RESPONSE_CAP_PERIODS * period);
             response.push(r);
             let higher = self.higher_load(l, &window_load);
-            rate.push(match r {
-                Some(r) if r <= period => 1.0,
-                Some(r) => period as f64 / (r + g / 2) as f64,
-                None => 0.0,
-            });
-            load.push((window_load[l] + higher) as f64 / window_ns as f64);
+            let busy = (window_load[l] + higher) as f64 / window_ns as f64;
+            // A lane full past the margin's share of the window has no room
+            // for the costs' tails and falls behind; measured costs' p95 is
+            // two to three times their mean on the Autoware replica.
+            let headroom = ((1.0 - self.margin) / busy.max(1e-9)).min(1.0);
+            rate.push(
+                match r {
+                    Some(r) if r <= period => 1.0,
+                    Some(r) => period as f64 / (r + g / 2) as f64,
+                    None => 0.0,
+                }
+                .min(headroom),
+            );
+            load.push(busy);
             // The typical stretch of a segment under preemption, as in the
             // paper: divided by the share the higher lanes leave.
             inflate.push(if higher < window_ns {
@@ -934,8 +957,8 @@ impl Rng {
 impl Model {
     /// The start: a pipeline. Connected components in deadline order, each in
     /// earliest-start order; a component that is short-deadline work
-    /// throughout and fits a CPU's share goes whole to a higher-tier lane,
-    /// the rest are cut into one stage per CPU by load.
+    /// throughout goes whole to the least loaded higher-tier lane, the rest
+    /// are cut into one stage per CPU by load.
     fn start_plan(&self) -> Assignment {
         let n = self.units.len();
         let cpus = self.cpus.len();
@@ -997,7 +1020,7 @@ impl Model {
         let mut lane_load = vec![0u64; cpus * tiers];
         let mut low = Vec::new();
         for &c in &components {
-            if tiers > 1 && comp_load[c] <= share && members[c].iter().all(|&o| self.short[o]) {
+            if tiers > 1 && members[c].iter().all(|&o| self.short[o]) {
                 let lane = cpus
                     + (0..cpus)
                         .min_by_key(|&i| (lane_load[cpus + i], i))
@@ -1037,7 +1060,10 @@ impl Model {
             let from = occupied[rng.below(occupied.len())];
             let at = rng.below(lanes[from].len());
             let o = lanes[from].remove(at);
-            let to = rng.below(lanes.len());
+            // A unit keeps its tier: a short chain must not straddle tiers.
+            let tier = self.lane_tier(from);
+            let cpus = self.cpus.len();
+            let to = tier * cpus + rng.below(cpus);
             let position = rng.below(lanes[to].len() + 1);
             lanes[to].insert(position, o);
         } else {
@@ -1549,12 +1575,14 @@ mod tests {
                     _ => panic!("{}: not a FIFO thread", worker.id),
                 };
                 assert_eq!(priority, if worker.id.ends_with("-hi") { 61 } else { 60 });
+                // The chain is due within its 10 ms period, so its whole
+                // graph sits on higher workers.
+                assert!(worker.id.ends_with("-hi"), "{}", worker.id);
                 for &step in &worker.steps {
                     lane_of.insert(step, l);
                 }
             }
-            // The chain is due within its 10 ms period, so its whole graph
-            // may sit on higher workers; the lanes must still be a pipeline.
+            // The lanes must still be a pipeline.
             let mut edges: BTreeSet<(usize, usize)> = mission
                 .dependencies
                 .iter()
