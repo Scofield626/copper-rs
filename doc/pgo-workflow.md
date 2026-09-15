@@ -306,8 +306,11 @@ only through those waits.
 **Objective**, lexicographic, smallest first: sources below their expected rate (a rate
 within 0.5% of nominal counts as kept); chains with `L_c` over their deadline; chains
 over `(1 − margin)` of it; sum of `L_c / D_c`; largest worker load. `objective: (kind:
-sum)` drops the two count tiers. The same tiers, from measured p99 latencies and delivered
-rates, rank the candidates after measurement.
+sum)` drops the two count tiers. `objective: (kind: miss_rate)` replaces them with the
+worst chain's predicted miss rate, then the mean: a chain over its deadline with mean
+costs counts 50%, over it only with p95 costs 5%, with p99 costs 1%, with worst costs
+0.1%. The same tiers, from measured p99 latencies, miss counts and delivered rates, rank
+the candidates after measurement.
 
 **Search.** `cu29-plan <config> --propose pgo.ron --profile profile.ron --cycle k` starts
 from the exported `k`-CopperList inventory (every required edge present, so any

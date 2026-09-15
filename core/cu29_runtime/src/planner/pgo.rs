@@ -69,7 +69,7 @@ pub struct CuSourceRate {
     pub period_ms: u32,
 }
 
-/// How candidates are ranked; both objectives keep every source rate first.
+/// How candidates are ranked; every objective keeps the source rates first.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CuObjective {
